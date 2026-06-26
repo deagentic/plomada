@@ -31,7 +31,7 @@ header h1{font-size:18px;font-weight:500;margin:0;color:var(--blue)}
 #stage{flex:1;position:relative;overflow:auto}
 svg{display:block}
 .node{cursor:pointer}
-.node rect{stroke-width:1.5;rx:8;transition:filter .12s}
+.node rect,.node path{stroke-width:1.5;transition:filter .12s}
 .node:hover rect{filter:brightness(.97)}
 .node.has-children rect{stroke-dasharray:none}
 .node text.t{font-weight:500;font-size:13px}
@@ -45,7 +45,13 @@ svg{display:block}
 .kind-branch rect{fill:#e8f0fe;stroke:#1a73e8}
 .kind-return rect{fill:#e6f4ea;stroke:#188038}
 .kind-loop rect{fill:#fce8e6;stroke:#c5221f}
-.edge.data_flow{stroke:#9334e6;opacity:.6}
+.edge.data_flow{stroke:#9334e6;opacity:.55}
+/* Gane-Sarson por rol (gana sobre kind-* para nodos statement) */
+.role-process rect{fill:#e8f0fe;stroke:#1a73e8}
+.role-store path,.role-store rect{fill:#fef7e0;stroke:#e37400;stroke-width:1.8}
+.role-external rect{fill:#e6f4ea;stroke:#188038}
+.flowlabel{fill:#9334e6;font-size:10px;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:3px}
+.node.inloop rect,.node.inloop path{stroke-dasharray:5 3}  /* dentro de un loop (anotación, no nodo) */
 .edge{fill:none;stroke:var(--dim);stroke-width:1.4;marker-end:url(#arrow);opacity:.45}
 .edge.import{stroke:var(--modL)}.edge.call{stroke:var(--blue)}
 .edge.unresolved{stroke-dasharray:4 3;opacity:.3}
@@ -80,7 +86,8 @@ let focus = ROOT ? ROOT.id : null;
 let selected = null;
 
 const KIND={package:"paquete",module:"módulo",class:"clase",function:"función",method:"método",
-  statement:"sentencia",assign:"asignación",loop:"loop",branch:"rama",return:"return",call:"llamada",expr:"expr"};
+  statement:"sentencia",assign:"asignación",loop:"loop",branch:"rama",return:"return",call:"llamada",expr:"expr",
+  store:"almacén",parameter:"parámetro",iterate:"bucle"};
 const NW=210, NH=52, GAPX=46, GAPY=70, PAD=40;
 
 function ancestors(id){const out=[];let c=byId[id];while(c){out.unshift(c);c=c.parent_id?byId[c.parent_id]:null;}return out;}
@@ -134,16 +141,28 @@ function draw(){
     p.setAttribute("class","edge "+e.type+(e.resolved===false?" unresolved":"")+(e.in_cycle?" loop":""));
     p.dataset.src=e.src;p.dataset.dst=e.dst;
     svg.appendChild(p);
+    if(e.type==="data_flow"&&e.var){     // etiqueta del dato que fluye
+      const lab=document.createElementNS(SVGNS,"text");
+      lab.setAttribute("class","flowlabel");lab.setAttribute("x",(x1+x2)/2);lab.setAttribute("y",my-2);
+      lab.textContent=e.var; svg.appendChild(lab);
+    }
   }
   // nodes
   kids.forEach(n=>{
     const p=pos[n.id];
     const g=document.createElementNS(SVGNS,"g");
-    g.setAttribute("class",`node kind-${n.kind}`+(childrenOf[n.id].length?" has-children":"")+(selected===n.id?" sel":"")+(n.recursive?" recursive":""));
+    g.setAttribute("class",`node kind-${n.kind}`+(n.dfd_role?` role-${n.dfd_role}`:"")+(childrenOf[n.id].length?" has-children":"")+(selected===n.id?" sel":"")+(n.recursive?" recursive":"")+(n.in_loop?" inloop":""));
     g.setAttribute("transform",`translate(${p.x},${p.y})`);
-    const r=document.createElementNS(SVGNS,"rect");
-    r.setAttribute("width",NW);r.setAttribute("height",NH);r.setAttribute("rx",8);
-    g.appendChild(r);
+    let shape;
+    if(n.dfd_role==="store"){            // almacén Gane-Sarson: rectángulo abierto a la derecha
+      shape=document.createElementNS(SVGNS,"path");
+      shape.setAttribute("d",`M${NW} 0 H0 V${NH} H${NW}`);
+    }else{                               // proceso = redondeado · entidad externa = cuadrado
+      shape=document.createElementNS(SVGNS,"rect");
+      shape.setAttribute("width",NW);shape.setAttribute("height",NH);
+      shape.setAttribute("rx", n.dfd_role==="external"?0:8);
+    }
+    g.appendChild(shape);
     const t=document.createElementNS(SVGNS,"text");
     t.setAttribute("class","t");t.setAttribute("x",12);t.setAttribute("y",22);
     t.textContent=(n.label||n.id).slice(0,n.recursive?24:28); g.appendChild(t);

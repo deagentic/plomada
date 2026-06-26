@@ -90,16 +90,16 @@ def compute(a, b):
 
         res = extractor.extract(tmpdir)
         
-        # Verificar dfd_role de paquetes, módulos y funciones
+        # Verificar que paquetes, módulos y funciones NO tienen dfd_role (sólo nivel statement)
         pkg_node = next(n for n in res["nodes"] if n["kind"] == "package")
-        assert pkg_node["dfd_role"] == "external"
+        assert "dfd_role" not in pkg_node
 
         mod_node = next(n for n in res["nodes"] if n["kind"] == "module")
-        assert mod_node["dfd_role"] == "external"
+        assert "dfd_role" not in mod_node
 
         func_nodes = [n for n in res["nodes"] if n["kind"] == "function"]
         assert len(func_nodes) == 2
-        assert all(f["dfd_role"] == "process" for f in func_nodes)
+        assert all("dfd_role" not in f for f in func_nodes)
 
         # Buscar el ID de la función compute
         compute_id = next(f["id"] for f in func_nodes if f["label"] == "compute")
@@ -116,25 +116,34 @@ def compute(a, b):
         assert {p["label"] for p in param_nodes} == {"a", "b"}
         assert all(p["dfd_role"] == "external" for p in param_nodes)
 
-        # Verificar asignaciones
-        # x = a + b: process
+        # Modelo Gane-Sarson estricto (Fallo 1 acordado): TODA asignación es un
+        # PROCESO; las variables locales son nodos STORE únicos (uno por nombre).
         x_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and n["label"].startswith("x ="))
         assert x_assign["dfd_role"] == "process"
+        assert "in_loop" not in x_assign
 
-        # y = x: store
         y_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and n["label"].startswith("y ="))
-        assert y_assign["dfd_role"] == "store"
+        assert y_assign["dfd_role"] == "process"
 
-        # print(item): call external -> external
+        # almacenes: una variable = un único nodo store (dedup por nombre)
+        stores = [n for n in stmt_nodes if n["dfd_role"] == "store"]
+        store_names = [n["label"] for n in stores]
+        assert {"x", "y"} <= set(store_names)
+        assert len(store_names) == len(set(store_names)) and all(n["kind"] == "store" for n in stores)
+
+        # print(item): call external -> external (dentro de loop)
         print_call = next(n for n in stmt_nodes if n["kind"] == "call" and n["label"].startswith("print"))
         assert print_call["dfd_role"] == "external"
+        assert print_call.get("in_loop") is True
 
-        # other_func(y): call local -> process
+        # other_func(y): call local -> process (dentro de loop)
         other_call = next(n for n in stmt_nodes if n["kind"] == "call" and n["label"].startswith("other_func"))
         assert other_call["dfd_role"] == "process"
+        assert other_call.get("in_loop") is True
 
         # return y -> external
         ret_stmt = next(n for n in stmt_nodes if n["kind"] == "return")
         assert ret_stmt["dfd_role"] == "external"
+        assert "in_loop" not in ret_stmt
 
 

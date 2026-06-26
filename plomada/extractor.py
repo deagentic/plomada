@@ -173,98 +173,110 @@ def _safe_unparse(node, n=26):
 
 
 def _function_dfd(func, file_rel, func_id, name_index):
-    """DFD intra-procedural (Gane-Sarson): procesos, almacenes y entidades externas.
-    Nivel 'statement', aristas 'data_flow' (def→uso) y 'contains' (función→sentencia)."""
+    """DFD intra-procedural Gane-Sarson ESTRICTO (Fallo 1, modelo variable=almacén):
+      - parámetro      → entidad externa (fuente)           dfd_role='external'
+      - variable local → UN almacén único (dedup por nombre) dfd_role='store'
+      - cómputo/asig.  → proceso numerado                    dfd_role='process'
+      - return         → entidad externa (sumidero)          dfd_role='external'
+    Flujos store↔process etiquetados con el dato; NO hay process→process directo ni
+    nodos de control (loops/condicionales) — se anota in_loop (ver DESIGN.md, Fallo 3
+    sobre el bypass lineal de ramas).
+    """
     nodes, edges = [], []
-    last_def, counter = {}, [0]
+    counter = [0]
+    param_ids, store_ids = {}, {}
 
-    def emit(kind, label, line, uses, defs=(), dfd_role="process"):
-        counter[0] += 1
-        nid = f"{func_id}#s{counter[0]}@{line}"
-        nodes.append({"id": nid, "level": "statement", "parent_id": func_id,
-                      "label": label, "kind": kind, "file": file_rel, "line": line,
-                      "dfd_role": dfd_role})
+    def _add(nid, kind, label, line, role, in_loop):
+        node = {"id": nid, "level": "statement", "parent_id": func_id, "label": label,
+                "kind": kind, "file": file_rel, "line": line, "dfd_role": role}
+        if in_loop:
+            node["in_loop"] = True
+        nodes.append(node)
         edges.append({"src": func_id, "dst": nid, "type": "contains", "resolved": True})
-        for u in sorted(uses):
-            if u in last_def:
-                edges.append({"src": last_def[u], "dst": nid, "type": "data_flow",
-                              "resolved": True, "var": u})
-        for d in defs:
-            last_def[d] = nid
 
-    # 1. Emitir parámetros como entidades externas (sources)
-    params = []
+    def param_node(name):
+        if name not in param_ids:
+            param_ids[name] = f"{func_id}#param:{name}"
+            _add(param_ids[name], "parameter", name, func.lineno, "external", False)
+        return param_ids[name]
+
+    def store_node(name, line, in_loop):
+        if name not in store_ids:
+            store_ids[name] = f"{func_id}#store:{name}"
+            _add(store_ids[name], "store", name, line, "store", in_loop)
+        return store_ids[name]
+
+    def source_of(name):                       # de dónde se LEE un nombre
+        if name in store_ids:
+            return store_ids[name]
+        if name in param_ids:
+            return param_ids[name]
+        return None                            # global/builtin/free → no se rastrea
+
+    def process(kind, label, line, reads, writes, role="process", in_loop=False):
+        counter[0] += 1
+        pid = f"{func_id}#p{counter[0]}@{line}"
+        _add(pid, kind, label, line, role, in_loop)
+        for r in sorted(reads):                # store/param → process
+            s = source_of(r)
+            if s:
+                edges.append({"src": s, "dst": pid, "type": "data_flow", "resolved": True, "var": r})
+        for w in writes:                       # process → store
+            edges.append({"src": pid, "dst": store_node(w, line, in_loop),
+                          "type": "data_flow", "resolved": True, "var": w})
+        return pid
+
+    # parámetros = entidades externas (fuentes)
     if hasattr(func, "args"):
-        posonly = getattr(func.args, "posonlyargs", [])
-        for a in posonly + func.args.args + func.args.kwonlyargs:
-            params.append(a.arg)
-        if func.args.vararg:
-            params.append(func.args.vararg.arg)
-        if func.args.kwarg:
-            params.append(func.args.kwarg.arg)
-    for p in params:
-        emit("parameter", p, func.lineno, uses=set(), defs=(p,), dfd_role="external")
+        a = func.args
+        for arg in getattr(a, "posonlyargs", []) + a.args + a.kwonlyargs:
+            param_node(arg.arg)
+        if a.vararg:
+            param_node(a.vararg.arg)
+        if a.kwarg:
+            param_node(a.kwarg.arg)
 
-    # 2. Caminar por las sentencias
-    def walk(stmts):
+    def walk(stmts, in_loop=False):
         for st in stmts:
             line = getattr(st, "lineno", func.lineno)
             if isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 val = getattr(st, "value", None)
                 tgts = _stmt_targets(st)
-                lbl = (", ".join(tgts) or "?") + (" = " + _safe_unparse(val, 22) if val else "")
-                
-                # Decidir dfd_role: process si tiene cómputo, store si es valor simple
-                role = "store"
+                reads = _names_loaded(val) if val else set()
                 if isinstance(st, ast.AugAssign):
-                    role = "process"
-                elif val is not None:
-                    if not isinstance(val, (ast.Name, ast.Constant, ast.Attribute)):
-                        role = "process"
-                emit("assign", lbl, line, _names_loaded(val) if val else set(), tgts, dfd_role=role)
+                    reads = reads | set(tgts)          # x += y también lee x
+                lbl = (", ".join(tgts) or "?") + (" = " + _safe_unparse(val, 20) if val else "")
+                process("assign", lbl, line, reads, tgts, in_loop=in_loop)
             elif isinstance(st, (ast.For, ast.AsyncFor)):
                 tgts = _stmt_targets(st.target)
-                iter_names = _names_loaded(st.iter)
-                # DFD estricto: Bypassear el nodo loop
-                # Encontrar el nodo que definió la colección y mapear los targets a él
-                source_node = None
-                for name in iter_names:
-                    if name in last_def:
-                        source_node = last_def[name]
-                        break
-                if source_node:
-                    for t in tgts:
-                        last_def[t] = source_node
-                walk(st.body)
-                walk(st.orelse)
+                process("iterate", f"for {', '.join(tgts) or '_'} in {_safe_unparse(st.iter, 16)}",
+                        line, _names_loaded(st.iter), tgts, in_loop=in_loop)
+                walk(st.body, True); walk(st.orelse, in_loop)
             elif isinstance(st, ast.While):
-                # DFD estricto: Bypassear el nodo loop (solo evaluar cuerpo)
-                walk(st.body)
-                walk(st.orelse)
+                walk(st.body, True); walk(st.orelse, in_loop)      # control → sin nodo
             elif isinstance(st, ast.If):
-                # DFD estricto: Bypassear el nodo branch (evaluar cuerpo y orelse)
-                walk(st.body)
-                walk(st.orelse)
+                walk(st.body, in_loop); walk(st.orelse, in_loop)   # control → sin nodo (bypass lineal)
             elif isinstance(st, ast.Return):
-                emit("return", "return " + (_safe_unparse(st.value, 22) if st.value else ""),
-                     line, _names_loaded(st.value) if st.value else set(), dfd_role="external")
+                process("return", "return " + (_safe_unparse(st.value, 18) if st.value else ""),
+                        line, _names_loaded(st.value) if st.value else set(), (),
+                        role="external", in_loop=in_loop)
             elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue  # tienen su propio nodo en otro nivel
+                continue
             elif isinstance(st, ast.Expr):
                 kind = "call" if isinstance(st.value, ast.Call) else "expr"
                 role = "process"
                 if kind == "call":
-                    # Si no está en name_index, es externa (stdlib, I/O, etc.)
                     f = st.value.func
-                    name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
-                    if name not in name_index:
-                        role = "external"
-                emit(kind, _safe_unparse(st.value, 34), line, _names_loaded(st.value), dfd_role=role)
+                    nm = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+                    if nm not in name_index:
+                        role = "external"          # stdlib/I-O cruza la frontera
+                process(kind, _safe_unparse(st.value, 30), line, _names_loaded(st.value), (),
+                        role=role, in_loop=in_loop)
             else:
                 for field in ("body", "orelse", "finalbody"):
                     sub = getattr(st, field, None)
                     if isinstance(sub, list):
-                        walk(sub)
+                        walk(sub, in_loop)
 
     walk(func.body)
     return nodes, edges
@@ -304,21 +316,21 @@ def extract(project_root):
     name_index = {}     # nombre simple -> [ids]
     symbol_by_dotted = {}   # "pkg.mod.Clase.metodo" -> id
 
-    def add_node(nid, level, parent, label, kind, file, line, dfd_role=None):
-        if dfd_role is None:
-            if kind == "package":
-                dfd_role = "external"
-            elif kind == "module":
-                dfd_role = "external"
-            elif kind == "class":
-                dfd_role = "store"
-            elif kind in ("function", "method"):
-                dfd_role = "process"
-            else:
-                dfd_role = "process"
-        nodes.setdefault(nid, {"id": nid, "level": level, "parent_id": parent,
-                               "label": label, "kind": kind, "file": file, "line": line,
-                               "dfd_role": dfd_role})
+    def add_node(nid, level, parent, label, kind, file, line, dfd_role=None, in_loop=None):
+        node = {
+            "id": nid,
+            "level": level,
+            "parent_id": parent,
+            "label": label,
+            "kind": kind,
+            "file": file,
+            "line": line,
+        }
+        if level == "statement" and dfd_role is not None:
+            node["dfd_role"] = dfd_role
+        if in_loop:
+            node["in_loop"] = True
+        nodes.setdefault(nid, node)
 
     add_node(_package_id(""), "package", None, os.path.basename(project_root), "package", ".", 0)
 
@@ -399,7 +411,7 @@ def extract(project_root):
                 continue
             sn, se = _function_dfd(fnode, file_rel, d["id"], name_index)
             for n in sn:
-                add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"], n["line"], n.get("dfd_role"))
+                add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"], n["line"], n.get("dfd_role"), n.get("in_loop"))
             edges.extend(se)
 
     # Colapsar cadenas de paquetes de un solo hijo
