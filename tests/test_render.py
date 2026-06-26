@@ -18,5 +18,8 @@ def test_render_html():
     assert "my-test-project" in html
     assert "pkg::<package>::0" in html
     # Verify basic template structures are present
-    assert "<svg id=\"svg\"></svg>" in html
-    assert "const G = " in html
+    assert "layout orientado al flujo (determinista)" in html
+    assert "backEdges" in html
+    assert "uniqueLayers" in html
+    assert "baricenters" in html
+    assert "Desconflictualizar etiquetas de flujo para evitar solapes" in html

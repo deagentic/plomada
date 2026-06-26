@@ -126,13 +126,232 @@ function draw(){
   defs.innerHTML='<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5f6368"/></marker>'+
     '<marker id="arrowLoop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c5221f"/></marker>';
   svg.appendChild(defs);
-  // layout grid (determinista)
-  const cols=Math.max(1,Math.floor((window.innerWidth-2*PAD)/(NW+GAPX)));
-  const pos={};
-  kids.forEach((n,i)=>{const r=Math.floor(i/cols),c=i%cols;pos[n.id]={x:PAD+c*(NW+GAPX),y:PAD+r*(NH+GAPY)};});
-  const rows=Math.ceil(kids.length/cols);
-  svg.setAttribute("width", Math.max(window.innerWidth, PAD*2+cols*(NW+GAPX)));
-  svg.setAttribute("height", Math.max(300, PAD*2+rows*(NH+GAPY)));
+  // layout orientado al flujo (determinista)
+  const nodeIds = kids.map(n => n.id);
+  const edges = visibleEdges(nodeIds);
+
+  const adj = {};
+  const rev_adj = {};
+  const inDegree = {};
+  const outDegree = {};
+  
+  nodeIds.forEach(id => {
+    adj[id] = [];
+    rev_adj[id] = [];
+    inDegree[id] = 0;
+    outDegree[id] = 0;
+  });
+
+  edges.forEach(e => {
+    if (adj[e.src] && adj[e.dst]) {
+      adj[e.src].push(e.dst);
+      rev_adj[e.dst].push(e.src);
+      inDegree[e.dst]++;
+      outDegree[e.src]++;
+    }
+  });
+
+  const visited = new Set();
+  const recStack = new Set();
+  const backEdges = new Set();
+
+  function dfs(u) {
+    visited.add(u);
+    recStack.add(u);
+    const neighbors = [...adj[u]].sort();
+    for (const v of neighbors) {
+      if (recStack.has(v)) {
+        backEdges.add(u + "->" + v);
+      } else if (!visited.has(v)) {
+        dfs(v);
+      }
+    }
+    recStack.delete(u);
+  }
+
+  const dfsSources = nodeIds.filter(id => inDegree[id] === 0).sort();
+  dfsSources.forEach(u => {
+    if (!visited.has(u)) dfs(u);
+  });
+  nodeIds.sort().forEach(u => {
+    if (!visited.has(u)) dfs(u);
+  });
+
+  const dagAdj = {};
+  const dagInDegree = {};
+  nodeIds.forEach(id => {
+    dagAdj[id] = [];
+    dagInDegree[id] = 0;
+  });
+  edges.forEach(e => {
+    if (adj[e.src] && adj[e.dst]) {
+      if (!backEdges.has(e.src + "->" + e.dst)) {
+        dagAdj[e.src].push(e.dst);
+        dagInDegree[e.dst]++;
+      }
+    }
+  });
+
+  const layers = {};
+  const queue = [];
+  nodeIds.forEach(id => {
+    layers[id] = 0;
+    if (dagInDegree[id] === 0) {
+      queue.push(id);
+    }
+  });
+
+  while (queue.length > 0) {
+    queue.sort();
+    const u = queue.shift();
+    const uLayer = layers[u];
+    for (const v of dagAdj[u]) {
+      layers[v] = Math.max(layers[v], uLayer + 1);
+      dagInDegree[v]--;
+      if (dagInDegree[v] === 0) {
+        queue.push(v);
+      }
+    }
+  }
+
+  kids.forEach(n => {
+    if (n.dfd_role === "store") {
+      const connectedProcIds = [];
+      edges.forEach(e => {
+        if (e.src === n.id && byId[e.dst] && byId[e.dst].dfd_role === "process") {
+          connectedProcIds.push(e.dst);
+        }
+        if (e.dst === n.id && byId[e.src] && byId[e.src].dfd_role === "process") {
+          connectedProcIds.push(e.src);
+        }
+      });
+      if (connectedProcIds.length > 0) {
+        connectedProcIds.sort();
+        const targetProcId = connectedProcIds[0];
+        layers[n.id] = layers[targetProcId];
+      }
+    }
+  });
+
+  let maxLayer = 0;
+  nodeIds.forEach(id => {
+    if (layers[id] > maxLayer) maxLayer = layers[id];
+  });
+
+  kids.forEach(n => {
+    const isReturn = n.kind === "return";
+    const isExtSink = n.dfd_role === "external" && outDegree[n.id] === 0 && inDegree[n.id] > 0;
+    if (isReturn || isExtSink) {
+      layers[n.id] = maxLayer + 1;
+    }
+  });
+
+  const uniqueLayers = [...new Set(Object.values(layers))].sort((a, b) => a - b);
+  const layerMap = {};
+  uniqueLayers.forEach((l, idx) => {
+    layerMap[l] = idx;
+  });
+  nodeIds.forEach(id => {
+    layers[id] = layerMap[layers[id]];
+  });
+
+  const totalLayers = uniqueLayers.length;
+  const layerNodes = [];
+  for (let i = 0; i < totalLayers; i++) {
+    layerNodes.push([]);
+  }
+  nodeIds.forEach(id => {
+    layerNodes[layers[id]].push(id);
+  });
+
+  layerNodes.forEach(nodesInLayer => {
+    nodesInLayer.sort();
+  });
+
+  function getPositionMap() {
+    const posInLayer = {};
+    layerNodes.forEach((nodesInLayer, layerIdx) => {
+      nodesInLayer.forEach((id, idx) => {
+        posInLayer[id] = idx;
+      });
+    });
+    return posInLayer;
+  }
+
+  const sweeps = 4;
+  for (let sweep = 0; sweep < sweeps; sweep++) {
+    const posInLayer = getPositionMap();
+
+    for (let i = 1; i < layerNodes.length; i++) {
+      const nodes = layerNodes[i];
+      const baricenters = {};
+      nodes.forEach(u => {
+        const preds = (rev_adj[u] || []).filter(v => layers[v] === i - 1);
+        if (preds.length > 0) {
+          const sum = preds.reduce((acc, v) => acc + posInLayer[v], 0);
+          baricenters[u] = sum / preds.length;
+        } else {
+          baricenters[u] = -1;
+        }
+      });
+
+      nodes.sort((a, b) => {
+        const ba = baricenters[a];
+        const bb = baricenters[b];
+        if (ba !== bb) {
+          if (ba === -1) return 1;
+          if (bb === -1) return -1;
+          return ba - bb;
+        }
+        return a.localeCompare(b);
+      });
+    }
+
+    for (let i = layerNodes.length - 2; i >= 0; i--) {
+      const nodes = layerNodes[i];
+      const baricenters = {};
+      nodes.forEach(u => {
+        const succs = (adj[u] || []).filter(v => layers[v] === i + 1);
+        if (succs.length > 0) {
+          const sum = succs.reduce((acc, v) => acc + posInLayer[v], 0);
+          baricenters[u] = sum / succs.length;
+        } else {
+          baricenters[u] = -1;
+        }
+      });
+
+      nodes.sort((a, b) => {
+        const ba = baricenters[a];
+        const bb = baricenters[b];
+        if (ba !== bb) {
+          if (ba === -1) return 1;
+          if (bb === -1) return -1;
+          return ba - bb;
+        }
+        return a.localeCompare(b);
+      });
+    }
+  }
+
+  const maxCols = Math.max(...layerNodes.map(a => a.length), 1);
+  const pos = {};
+  const svgW = Math.max(window.innerWidth, PAD * 2 + maxCols * (NW + GAPX) - GAPX);
+
+  layerNodes.forEach((nodesInLayer, layerIdx) => {
+    const nInLayer = nodesInLayer.length;
+    const layerW = nInLayer * NW + (nInLayer - 1) * GAPX;
+    const startX = (svgW - layerW) / 2;
+
+    nodesInLayer.forEach((id, colIdx) => {
+      pos[id] = {
+        x: startX + colIdx * (NW + GAPX),
+        y: PAD + layerIdx * (NH + GAPY)
+      };
+    });
+  });
+
+  svg.setAttribute("width", svgW);
+  svg.setAttribute("height", Math.max(300, PAD * 2 + layerNodes.length * (NH + GAPY) - GAPY));
   // edges
   const ids=kids.map(n=>n.id);
   for(const e of visibleEdges(ids)){
@@ -187,6 +406,24 @@ function draw(){
     g.onclick=()=>{ if(childrenOf[n.id].length){focus=n.id;selected=null;} else {selected=selected===n.id?null:n.id;} draw(); };
     svg.appendChild(g);
   });
+  // Desconflictualizar etiquetas de flujo para evitar solapes
+  const labels = Array.from(svg.querySelectorAll(".flowlabel"));
+  labels.sort((a, b) => parseFloat(a.getAttribute("x")) - parseFloat(b.getAttribute("x")));
+  for (let i = 0; i < labels.length; i++) {
+    const la = labels[i];
+    const xa = parseFloat(la.getAttribute("x"));
+    let ya = parseFloat(la.getAttribute("y"));
+    for (let j = 0; j < i; j++) {
+      const lb = labels[j];
+      const xb = parseFloat(lb.getAttribute("x"));
+      const yb = parseFloat(lb.getAttribute("y"));
+      if (Math.abs(xa - xb) < 80 && Math.abs(ya - yb) < 12) {
+        ya = yb + 12;
+        la.setAttribute("y", ya);
+      }
+    }
+  }
+
   // resaltar aristas del seleccionado
   if(selected){
     svg.querySelectorAll(".edge").forEach(p=>{
