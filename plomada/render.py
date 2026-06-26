@@ -41,6 +41,11 @@ svg{display:block}
 .kind-class rect{fill:var(--cls);stroke:var(--clsL)}
 .kind-function rect{fill:var(--fn);stroke:var(--fnL)}
 .kind-method rect{fill:var(--mtd);stroke:var(--mtdL)}
+.kind-assign rect,.kind-call rect,.kind-expr rect{fill:#f1f3f4;stroke:#9aa0a6}
+.kind-branch rect{fill:#e8f0fe;stroke:#1a73e8}
+.kind-return rect{fill:#e6f4ea;stroke:#188038}
+.kind-loop rect{fill:#fce8e6;stroke:#c5221f}
+.edge.data_flow{stroke:#9334e6;opacity:.6}
 .edge{fill:none;stroke:var(--dim);stroke-width:1.4;marker-end:url(#arrow);opacity:.45}
 .edge.import{stroke:var(--modL)}.edge.call{stroke:var(--blue)}
 .edge.unresolved{stroke-dasharray:4 3;opacity:.3}
@@ -74,7 +79,8 @@ const ROOT = G.nodes.find(n=>n.level==="package" && !n.parent_id);
 let focus = ROOT ? ROOT.id : null;
 let selected = null;
 
-const KIND={package:"paquete",module:"módulo",class:"clase",function:"función",method:"método"};
+const KIND={package:"paquete",module:"módulo",class:"clase",function:"función",method:"método",
+  statement:"sentencia",assign:"asignación",loop:"loop",branch:"rama",return:"return",call:"llamada",expr:"expr"};
 const NW=210, NH=52, GAPX=46, GAPY=70, PAD=40;
 
 function ancestors(id){const out=[];let c=byId[id];while(c){out.unshift(c);c=c.parent_id?byId[c.parent_id]:null;}return out;}

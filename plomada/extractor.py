@@ -156,6 +156,92 @@ class _CallVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _names_loaded(node):
+    return {x.id for x in ast.walk(node) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load)}
+
+
+def _stmt_targets(node):
+    return sorted({x.id for x in ast.walk(node) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)})
+
+
+def _safe_unparse(node, n=26):
+    try:
+        s = ast.unparse(node)
+    except Exception:
+        s = "…"
+    return s[:n]
+
+
+def _function_dfd(func, file_rel, func_id):
+    """DFD intra-procedural (MVP, def-use lineal): sentencias + flujo de datos + loops.
+    Nivel 'statement', aristas 'data_flow' (def→uso) y 'contains' (función→sentencia)."""
+    nodes, edges = [], []
+    last_def, counter = {}, [0]
+
+    def emit(kind, label, line, uses, defs=()):
+        counter[0] += 1
+        nid = f"{func_id}#s{counter[0]}@{line}"
+        nodes.append({"id": nid, "level": "statement", "parent_id": func_id,
+                      "label": label, "kind": kind, "file": file_rel, "line": line})
+        edges.append({"src": func_id, "dst": nid, "type": "contains", "resolved": True})
+        for u in sorted(uses):
+            if u in last_def:
+                edges.append({"src": last_def[u], "dst": nid, "type": "data_flow",
+                              "resolved": True, "var": u})
+        for d in defs:
+            last_def[d] = nid
+
+    def walk(stmts):
+        for st in stmts:
+            line = getattr(st, "lineno", func.lineno)
+            if isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                val = getattr(st, "value", None)
+                tgts = _stmt_targets(st)
+                lbl = (", ".join(tgts) or "?") + (" = " + _safe_unparse(val, 22) if val else "")
+                emit("assign", lbl, line, _names_loaded(val) if val else set(), tgts)
+            elif isinstance(st, (ast.For, ast.AsyncFor)):
+                tgts = _stmt_targets(st.target)
+                emit("loop", f"for {', '.join(tgts) or '_'} in {_safe_unparse(st.iter, 18)}",
+                     line, _names_loaded(st.iter), tgts)
+                walk(st.body); walk(st.orelse)
+            elif isinstance(st, ast.While):
+                emit("loop", f"while {_safe_unparse(st.test, 24)}", line, _names_loaded(st.test))
+                walk(st.body); walk(st.orelse)
+            elif isinstance(st, ast.If):
+                emit("branch", f"if {_safe_unparse(st.test, 24)}", line, _names_loaded(st.test))
+                walk(st.body); walk(st.orelse)
+            elif isinstance(st, ast.Return):
+                emit("return", "return " + (_safe_unparse(st.value, 22) if st.value else ""),
+                     line, _names_loaded(st.value) if st.value else set())
+            elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue  # tienen su propio nodo en otro nivel
+            elif isinstance(st, ast.Expr):
+                emit("call" if isinstance(st.value, ast.Call) else "expr",
+                     _safe_unparse(st.value, 34), line, _names_loaded(st.value))
+            else:
+                for field in ("body", "orelse", "finalbody"):
+                    sub = getattr(st, field, None)
+                    if isinstance(sub, list):
+                        walk(sub)
+    walk(func.body)
+    return nodes, edges
+
+
+def _walk_funcs(tree):
+    """(qualname, FunctionDef) con stack de qualname, igual que _ModuleVisitor."""
+    out = []
+
+    def rec(body, stack):
+        for st in body:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.append((".".join(stack + [st.name]), st))
+                rec(st.body, stack + [st.name])
+            elif isinstance(st, ast.ClassDef):
+                rec(st.body, stack + [st.name])
+    rec(tree.body, [])
+    return out
+
+
 def _iter_py(project_root):
     files = []
     for dirpath, dirnames, filenames in os.walk(project_root):
@@ -244,6 +330,22 @@ def extract(project_root):
         except (SyntaxError, UnicodeDecodeError):
             continue
         _CallVisitor(file_rel, mv.defs, name_index, symbol_by_dotted, alias_map, edges).visit(tree)
+
+    # PASADA 3: DFD intra-función (sentencias + data_flow + loops for/while)
+    for file_rel, mv in modules:
+        try:
+            tree = ast.parse(open(os.path.join(project_root, file_rel), encoding="utf-8").read(),
+                             filename=file_rel)
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for qual, fnode in _walk_funcs(tree):
+            d = mv.defs.get(qual)
+            if not d:
+                continue
+            sn, se = _function_dfd(fnode, file_rel, d["id"])
+            for n in sn:
+                add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"], n["line"])
+            edges.extend(se)
 
     # Colapsar cadenas de paquetes de un solo hijo
     while True:
