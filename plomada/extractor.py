@@ -193,6 +193,7 @@ def extract(project_root):
             sub = "/".join(parts[: i + 1])
             parent = _package_id("/".join(parts[:i])) if i else _package_id("")
             add_node(_package_id(sub), "package", parent, parts[i], "package", sub, 0)
+            edges.append({"src": parent, "dst": _package_id(sub), "type": "contains", "resolved": True})
 
     # PASADA 1: símbolos
     for f in py_files:
@@ -243,6 +244,48 @@ def extract(project_root):
         except (SyntaxError, UnicodeDecodeError):
             continue
         _CallVisitor(file_rel, mv.defs, name_index, symbol_by_dotted, alias_map, edges).visit(tree)
+
+    # Colapsar cadenas de paquetes de un solo hijo
+    while True:
+        # 1. Contar hijos por cada nodo basándonos en parent_id
+        parent_to_children = {}
+        for nid, node in nodes.items():
+            pid = node.get("parent_id")
+            if pid:
+                parent_to_children.setdefault(pid, []).append(nid)
+        
+        # 2. Buscar un paquete que tenga exactamente un hijo y ese hijo sea paquete
+        to_collapse = None
+        for nid, node in nodes.items():
+            if node["level"] == "package":
+                children = parent_to_children.get(nid, [])
+                if len(children) == 1:
+                    child_id = children[0]
+                    child_node = nodes[child_id]
+                    if child_node["level"] == "package":
+                        to_collapse = (nid, child_id)
+                        break
+        
+        if not to_collapse:
+            break
+            
+        parent_id, child_id = to_collapse
+        grandparent_id = nodes[parent_id].get("parent_id")
+        nodes[child_id]["parent_id"] = grandparent_id
+        del nodes[parent_id]
+        
+        # Actualizar las aristas que se referían a parent_id
+        new_edges = []
+        for e in edges:
+            src, dst = e["src"], e["dst"]
+            if src == parent_id and dst == child_id:
+                continue
+            if src == parent_id:
+                e["src"] = child_id
+            if dst == parent_id:
+                e["dst"] = child_id
+            new_edges.append(e)
+        edges = new_edges
 
     # dedup
     seen, uniq = set(), []
