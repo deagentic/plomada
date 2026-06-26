@@ -44,10 +44,10 @@ svg{display:block}
 .edge{fill:none;stroke:var(--dim);stroke-width:1.4;marker-end:url(#arrow);opacity:.45}
 .edge.import{stroke:var(--modL)}.edge.call{stroke:var(--blue)}
 .edge.unresolved{stroke-dasharray:4 3;opacity:.3}
-.node.sel rect{stroke-width:3}
-.edge.hot{opacity:1;stroke-width:2.4}
 .edge.loop{stroke:#c5221f;stroke-width:2.2;opacity:.9;marker-end:url(#arrowLoop)}
 .node.recursive rect{stroke:#c5221f;stroke-width:2.5}
+.node.sel rect{stroke-width:3.5}
+.edge.hot{opacity:1;stroke-width:2.4}
 .node text.loop{fill:#c5221f;font-size:14px;font-weight:700}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim)}
 #legend{position:fixed;right:16px;bottom:16px;background:var(--panel);border:1px solid var(--line);
@@ -139,7 +139,7 @@ function draw(){
     g.appendChild(r);
     const t=document.createElementNS(SVGNS,"text");
     t.setAttribute("class","t");t.setAttribute("x",12);t.setAttribute("y",22);
-    t.textContent=(n.label||n.id).slice(0,28); g.appendChild(t);
+    t.textContent=(n.label||n.id).slice(0,n.recursive?24:28); g.appendChild(t);
     const s=document.createElementNS(SVGNS,"text");
     s.setAttribute("class","s");s.setAttribute("x",12);s.setAttribute("y",40);
     const nk=childrenOf[n.id].length;
@@ -164,7 +164,7 @@ function draw(){
 const LG=[["package","paquete"],["module","módulo"],["class","clase"],["function","función"],["method","método"]];
 document.getElementById("legend").innerHTML = LG.map(([k,l])=>
   `<div><i class="leg-${k}"></i>${l}</div>`).join("")+
-  '<div style="margin-top:6px;color:#5f6368">— import · <span style="color:#1a73e8">— call</span></div>';
+  `<div style="margin-top:6px;color:#5f6368">— import · <span style="color:#1a73e8">— call</span>${G.stats && G.stats.loops ? ' · <span style="color:#c5221f">— loop (↺)</span>' : ''}</div>`;
 document.querySelectorAll("#legend i").forEach((el,i)=>{
   const k=LG[i][0]; const cs=getComputedStyle(document.documentElement);
   el.style.background=cs.getPropertyValue("--"+(k==="package"?"pkg":k==="module"?"mod":k==="class"?"cls":k==="function"?"fn":"mtd"));
