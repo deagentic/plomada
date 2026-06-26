@@ -1,0 +1,16 @@
+[project]
+name = "plomada"
+version = "0.1.0"
+description = "Vista dinámica arquitectura→DFD de un proyecto Python, offline y sin IA en runtime."
+requires-python = ">=3.11"
+dependencies = []           # sin dependencias externas (stdlib pura)
+
+[project.scripts]
+plomada = "plomada.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["plomada"]
