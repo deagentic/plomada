@@ -1,4 +1,3 @@
-import pytest
 from plomada import model
 
 def test_build_model():

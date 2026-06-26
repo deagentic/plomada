@@ -1,4 +1,3 @@
-import pytest
 from plomada import render
 
 def test_render_html():

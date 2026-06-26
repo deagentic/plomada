@@ -6,3 +6,4 @@ dist/
 report.html
 graph.json
 .venv/
+out.html
