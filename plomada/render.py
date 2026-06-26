@@ -52,6 +52,9 @@ svg{display:block}
 .role-external rect{fill:#e6f4ea;stroke:#188038}
 .flowlabel{fill:#9334e6;font-size:10px;text-anchor:middle;paint-order:stroke;stroke:#fff;stroke-width:3px}
 .node.inloop rect,.node.inloop path{stroke-dasharray:5 3}  /* dentro de un loop (anotación, no nodo) */
+.shadow{fill:#9aa0a6;opacity:.35}                          /* sombra de entidad externa (Gane-Sarson) */
+.divider{stroke:#888;stroke-width:1}                       /* franja de proceso / compartimento de almacén */
+.dfdnum{font-size:10px;font-weight:700;fill:#5f6368}       /* nº de proceso (1,2…) / id de almacén (D1…) */
 .edge{fill:none;stroke:var(--dim);stroke-width:1.4;marker-end:url(#arrow);opacity:.45}
 .edge.import{stroke:var(--modL)}.edge.call{stroke:var(--blue)}
 .edge.unresolved{stroke-dasharray:4 3;opacity:.3}
@@ -147,36 +150,40 @@ function draw(){
       lab.textContent=e.var; svg.appendChild(lab);
     }
   }
+  // numeración DFD determinista: procesos 1,2… · almacenes D1,D2… (kids ya viene ordenado)
+  let pn=0, dn=0; const num={};
+  kids.forEach(n=>{ if(n.dfd_role==="process") num[n.id]=""+(++pn);
+                    else if(n.dfd_role==="store") num[n.id]="D"+(++dn); });
+  const mk=t=>document.createElementNS(SVGNS,t);
   // nodes
   kids.forEach(n=>{
-    const p=pos[n.id];
-    const g=document.createElementNS(SVGNS,"g");
-    g.setAttribute("class",`node kind-${n.kind}`+(n.dfd_role?` role-${n.dfd_role}`:"")+(childrenOf[n.id].length?" has-children":"")+(selected===n.id?" sel":"")+(n.recursive?" recursive":"")+(n.in_loop?" inloop":""));
+    const p=pos[n.id], role=n.dfd_role;
+    const g=mk("g");
+    g.setAttribute("class",`node kind-${n.kind}`+(role?` role-${role}`:"")+(childrenOf[n.id].length?" has-children":"")+(selected===n.id?" sel":"")+(n.recursive?" recursive":"")+(n.in_loop?" inloop":""));
     g.setAttribute("transform",`translate(${p.x},${p.y})`);
-    let shape;
-    if(n.dfd_role==="store"){            // almacén Gane-Sarson: rectángulo abierto a la derecha
-      shape=document.createElementNS(SVGNS,"path");
-      shape.setAttribute("d",`M${NW} 0 H0 V${NH} H${NW}`);
-    }else{                               // proceso = redondeado · entidad externa = cuadrado
-      shape=document.createElementNS(SVGNS,"rect");
-      shape.setAttribute("width",NW);shape.setAttribute("height",NH);
-      shape.setAttribute("rx", n.dfd_role==="external"?0:8);
+    if(role==="external"){                         // entidad externa: cuadrado con SOMBRA
+      const sh=mk("rect");sh.setAttribute("class","shadow");sh.setAttribute("x",4);sh.setAttribute("y",4);
+      sh.setAttribute("width",NW);sh.setAttribute("height",NH);g.appendChild(sh);
+      const r=mk("rect");r.setAttribute("width",NW);r.setAttribute("height",NH);r.setAttribute("rx",0);g.appendChild(r);
+    }else if(role==="store"){                       // almacén: abierto a la derecha + compartimento Dn
+      const pth=mk("path");pth.setAttribute("d",`M${NW} 0 H0 V${NH} H${NW}`);g.appendChild(pth);
+      const ln=mk("line");ln.setAttribute("class","divider");ln.setAttribute("x1",30);ln.setAttribute("y1",0);ln.setAttribute("x2",30);ln.setAttribute("y2",NH);g.appendChild(ln);
+      const id=mk("text");id.setAttribute("class","dfdnum");id.setAttribute("x",15);id.setAttribute("y",30);id.setAttribute("text-anchor","middle");id.textContent=num[n.id]||"D";g.appendChild(id);
+    }else{                                          // proceso (y niveles altos): redondeado
+      const r=mk("rect");r.setAttribute("width",NW);r.setAttribute("height",NH);r.setAttribute("rx",8);g.appendChild(r);
+      if(role==="process"){                         // franja superior con número
+        const ln=mk("line");ln.setAttribute("class","divider");ln.setAttribute("x1",0);ln.setAttribute("y1",18);ln.setAttribute("x2",NW);ln.setAttribute("y2",18);g.appendChild(ln);
+        const id=mk("text");id.setAttribute("class","dfdnum");id.setAttribute("x",8);id.setAttribute("y",13);id.textContent=num[n.id]||"";g.appendChild(id);
+      }
     }
-    g.appendChild(shape);
-    const t=document.createElementNS(SVGNS,"text");
-    t.setAttribute("class","t");t.setAttribute("x",12);t.setAttribute("y",22);
-    t.textContent=(n.label||n.id).slice(0,n.recursive?24:28); g.appendChild(t);
-    const s=document.createElementNS(SVGNS,"text");
-    s.setAttribute("class","s");s.setAttribute("x",12);s.setAttribute("y",40);
+    const isProc=role==="process", tx=role==="store"?38:12, ty=isProc?32:22;
+    const t=mk("text");t.setAttribute("class","t");t.setAttribute("x",tx);t.setAttribute("y",ty);
+    t.textContent=(n.label||n.id).slice(0, role==="store"?20:(n.recursive?24:28));g.appendChild(t);
+    const s=mk("text");s.setAttribute("class","s");s.setAttribute("x",tx);s.setAttribute("y",isProc?46:40);
     const nk=childrenOf[n.id].length;
     s.textContent=KIND[n.kind]+(nk?` · ${nk} dentro`:"")+(n.kind!=="package"&&n.kind!=="module"&&n.line?` · L${n.line}`:"");
     g.appendChild(s);
-    if(n.recursive){  // badge de loop/recursión
-      const lp=document.createElementNS(SVGNS,"text");
-      lp.setAttribute("class","loop");lp.setAttribute("x",NW-22);lp.setAttribute("y",24);
-      lp.textContent="↺"; lp.appendChild(document.createElementNS(SVGNS,"title")).textContent="recursión / en un ciclo";
-      g.appendChild(lp);
-    }
+    if(n.recursive){const lp=mk("text");lp.setAttribute("class","loop");lp.setAttribute("x",NW-22);lp.setAttribute("y",isProc?14:24);lp.textContent="↺";lp.appendChild(mk("title")).textContent="recursión / en un ciclo";g.appendChild(lp);}
     g.onclick=()=>{ if(childrenOf[n.id].length){focus=n.id;selected=null;} else {selected=selected===n.id?null:n.id;} draw(); };
     svg.appendChild(g);
   });
