@@ -147,3 +147,59 @@ def compute(a, b):
         assert "in_loop" not in ret_stmt
 
 
+def test_dfd_edge_cases():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg_dir = os.path.join(tmpdir, "pkg")
+        os.makedirs(pkg_dir)
+        with open(os.path.join(pkg_dir, "__init__.py"), "w") as f:
+            f.write("# init\n")
+        with open(os.path.join(pkg_dir, "edge_cases.py"), "w") as f:
+            f.write("""
+def test_func(self, data):
+    if (x := 42) > 0:
+        self.value = x
+    data["key"] = x
+""")
+
+        res = extractor.extract(tmpdir)
+        func_node = next(n for n in res["nodes"] if n["kind"] == "function" and n["label"] == "test_func")
+        func_id = func_node["id"]
+        
+        stmt_nodes = [n for n in res["nodes"] if n["parent_id"] == func_id and n["level"] == "statement"]
+        
+        # 1. Walrus operator
+        # Debe haber un proceso assign para 'x := 42'
+        walrus_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and "x :=" in n["label"])
+        assert walrus_assign["dfd_role"] == "process"
+        
+        # Debe haber un almacén 'x'
+        x_store = next(n for n in stmt_nodes if n["kind"] == "store" and n["label"] == "x")
+        assert x_store["dfd_role"] == "store"
+        
+        # Arista del proceso assign walrus al store 'x'
+        walrus_to_store = next(e for e in res["edges"] if e["src"] == walrus_assign["id"] and e["dst"] == x_store["id"])
+        assert walrus_to_store["var"] == "x"
+        
+        # 2. Asignación a atributos (self.value = x)
+        # El target base debe ser 'self'
+        attr_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and "self.value" in n["label"])
+        
+        # 'self' es un parámetro -> external
+        self_param = next(n for n in stmt_nodes if n["kind"] == "parameter" and n["label"] == "self")
+        
+        # Debe haber una arista desde attr_assign al parámetro self (como escritura)
+        attr_to_self = next(e for e in res["edges"] if e["src"] == attr_assign["id"] and e["dst"] == self_param["id"])
+        assert attr_to_self["var"] == "self"
+        
+        # 3. Asignación a subíndices (data["key"] = x)
+        # El target base debe ser 'data'
+        sub_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and ('data["key"]' in n["label"] or "data['key']" in n["label"]))
+        
+        # 'data' es un parámetro -> external
+        data_param = next(n for n in stmt_nodes if n["kind"] == "parameter" and n["label"] == "data")
+        
+        sub_to_data = next(e for e in res["edges"] if e["src"] == sub_assign["id"] and e["dst"] == data_param["id"])
+        assert sub_to_data["var"] == "data"
+
+
+

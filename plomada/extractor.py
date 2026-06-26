@@ -156,12 +156,66 @@ class _CallVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _names_loaded(node):
-    return {x.id for x in ast.walk(node) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load)}
+def _get_base_name(node):
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
 
 
 def _stmt_targets(node):
-    return sorted({x.id for x in ast.walk(node) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)})
+    nodes_to_walk = []
+    if isinstance(node, ast.Assign):
+        nodes_to_walk = node.targets
+    elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor)):
+        nodes_to_walk = [node.target]
+    elif hasattr(node, "target"):
+        nodes_to_walk = [node.target]
+    else:
+        nodes_to_walk = [node]
+
+    found = set()
+    for item in nodes_to_walk:
+        for x in ast.walk(item):
+            if isinstance(x, ast.Name):
+                if isinstance(x.ctx, ast.Store):
+                    found.add(x.id)
+            elif isinstance(x, (ast.Attribute, ast.Subscript)):
+                if isinstance(x.ctx, ast.Store):
+                    base = _get_base_name(x)
+                    if base:
+                        found.add(base)
+    return sorted(found)
+
+
+def _names_loaded(node):
+    names = set()
+    for x in ast.walk(node):
+        if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load):
+            names.add(x.id)
+        elif isinstance(x, ast.NamedExpr):
+            for t in _stmt_targets(x.target):
+                names.add(t)
+    return names
+
+
+def _find_named_exprs(node):
+    exprs = []
+    def visit(n):
+        if isinstance(n, ast.NamedExpr):
+            exprs.append(n)
+        for field, value in ast.iter_fields(n):
+            if field in ("body", "orelse", "finalbody"):
+                continue
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        visit(item)
+            elif isinstance(value, ast.AST):
+                visit(value)
+    visit(node)
+    return exprs
 
 
 def _safe_unparse(node, n=26):
@@ -221,8 +275,9 @@ def _function_dfd(func, file_rel, func_id, name_index):
             s = source_of(r)
             if s:
                 edges.append({"src": s, "dst": pid, "type": "data_flow", "resolved": True, "var": r})
-        for w in writes:                       # process → store
-            edges.append({"src": pid, "dst": store_node(w, line, in_loop),
+        for w in writes:                       # process → store/param
+            dst_id = param_ids[w] if w in param_ids else store_node(w, line, in_loop)
+            edges.append({"src": pid, "dst": dst_id,
                           "type": "data_flow", "resolved": True, "var": w})
         return pid
 
@@ -239,13 +294,21 @@ def _function_dfd(func, file_rel, func_id, name_index):
     def walk(stmts, in_loop=False):
         for st in stmts:
             line = getattr(st, "lineno", func.lineno)
+            # Buscar NamedExprs en la sentencia actual ANTES de procesarla
+            for ne in _find_named_exprs(st):
+                ne_line = getattr(ne, "lineno", line)
+                ne_tgts = _stmt_targets(ne)
+                ne_reads = _names_loaded(ne.value)
+                ne_lbl = f"{', '.join(ne_tgts) or '?'} := {_safe_unparse(ne.value, 18)}"
+                process("assign", ne_lbl, ne_line, ne_reads, ne_tgts, in_loop=in_loop)
+
             if isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 val = getattr(st, "value", None)
                 tgts = _stmt_targets(st)
                 reads = _names_loaded(val) if val else set()
                 if isinstance(st, ast.AugAssign):
                     reads = reads | set(tgts)          # x += y también lee x
-                lbl = (", ".join(tgts) or "?") + (" = " + _safe_unparse(val, 20) if val else "")
+                lbl = _safe_unparse(st, 30)
                 process("assign", lbl, line, reads, tgts, in_loop=in_loop)
             elif isinstance(st, (ast.For, ast.AsyncFor)):
                 tgts = _stmt_targets(st.target)
@@ -263,6 +326,8 @@ def _function_dfd(func, file_rel, func_id, name_index):
             elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
             elif isinstance(st, ast.Expr):
+                if isinstance(st.value, ast.NamedExpr):
+                    continue
                 kind = "call" if isinstance(st.value, ast.Call) else "expr"
                 role = "process"
                 if kind == "call":
@@ -456,12 +521,18 @@ def extract(project_root):
             new_edges.append(e)
         edges = new_edges
 
-    # dedup
-    seen, uniq = set(), []
+    # dedup y combinación de flujos paralelos de datos
+    merged = {}
     for e in edges:
-        k = (e["src"], e["dst"], e["type"], e.get("callee"))
-        if k not in seen:
-            seen.add(k)
-            uniq.append(e)
+        k = (e["src"], e["dst"], e["type"], e.get("callee") or "")
+        if k not in merged:
+            merged[k] = dict(e)
+        else:
+            if e["type"] == "data_flow" and "var" in e and "var" in merged[k]:
+                curr_vars = [v.strip() for v in merged[k]["var"].split(",")]
+                if e["var"] not in curr_vars:
+                    curr_vars.append(e["var"])
+                    merged[k]["var"] = ", ".join(sorted(curr_vars))
+    uniq = list(merged.values())
 
     return {"root": os.path.basename(project_root), "nodes": list(nodes.values()), "edges": uniq}

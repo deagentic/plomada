@@ -56,6 +56,13 @@ plomada/
 - Algoritmo concreto de `layout` determinista (cajas anidadas + ruteo de aristas).
 - Reconciliación fina entre `plomada /path` y los subcomandos.
 
+## Limitaciones del MVP (Trabajo Futuro)
+
+1. **Bypass Lineal de Estructuras de Control (`If`/Branches)**:
+   - Al no construir un Grafo de Flujo de Control (CFG) completo o forma SSA, la extracción del DFD intra-procedural recorre las ramas condicionales de forma lineal (`body` seguido de `orelse`).
+   - Esto implica que las variables redefinidas en múltiples ramas o definidas exclusivamente en una rama no resuelven mediante nodos phi/mezcla. Las lecturas subsiguientes apuntarán a la última definición registrada de manera lineal.
+
 ## Criterio de aceptación
 
 `plomada ~/work/plomada` produce su **propia** vista (arquitectura → DFD). Dogfood.
+
