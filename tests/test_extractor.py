@@ -65,3 +65,76 @@ def test_multiple_packages_no_collapse():
         labels = {n["label"] for n in sub_nodes}
         assert labels == {"pkg1", "pkg2"}
 
+
+def test_dfd_gane_sarson_roles():
+    # Crear un proyecto temporal con un archivo que contiene una función compleja
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg_dir = os.path.join(tmpdir, "pkg")
+        os.makedirs(pkg_dir)
+        with open(os.path.join(pkg_dir, "__init__.py"), "w") as f:
+            f.write("# init\n")
+        with open(os.path.join(pkg_dir, "calc.py"), "w") as f:
+            f.write("""
+def other_func(x):
+    return x + 1
+
+def compute(a, b):
+    x = a + b             # assign con computo -> process
+    y = x                 # assign sin computo -> store
+    for item in [1, 2]:   # loop -> no node, but item source
+        print(item)       # call external -> external
+        other_func(y)     # call local -> process
+    if x > 0:             # branch -> no node
+        return y          # return -> external
+""")
+
+        res = extractor.extract(tmpdir)
+        
+        # Verificar dfd_role de paquetes, módulos y funciones
+        pkg_node = next(n for n in res["nodes"] if n["kind"] == "package")
+        assert pkg_node["dfd_role"] == "external"
+
+        mod_node = next(n for n in res["nodes"] if n["kind"] == "module")
+        assert mod_node["dfd_role"] == "external"
+
+        func_nodes = [n for n in res["nodes"] if n["kind"] == "function"]
+        assert len(func_nodes) == 2
+        assert all(f["dfd_role"] == "process" for f in func_nodes)
+
+        # Buscar el ID de la función compute
+        compute_id = next(f["id"] for f in func_nodes if f["label"] == "compute")
+        
+        # Obtener los statement nodes de compute
+        stmt_nodes = [n for n in res["nodes"] if n["level"] == "statement" and n["parent_id"] == compute_id]
+        
+        # Verificar que no hay nodos de tipo loop/branch
+        assert not any(n["kind"] in ("loop", "branch") for n in stmt_nodes)
+        
+        # Verificar parámetros como external
+        param_nodes = [n for n in stmt_nodes if n["kind"] == "parameter"]
+        assert len(param_nodes) == 2
+        assert {p["label"] for p in param_nodes} == {"a", "b"}
+        assert all(p["dfd_role"] == "external" for p in param_nodes)
+
+        # Verificar asignaciones
+        # x = a + b: process
+        x_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and n["label"].startswith("x ="))
+        assert x_assign["dfd_role"] == "process"
+
+        # y = x: store
+        y_assign = next(n for n in stmt_nodes if n["kind"] == "assign" and n["label"].startswith("y ="))
+        assert y_assign["dfd_role"] == "store"
+
+        # print(item): call external -> external
+        print_call = next(n for n in stmt_nodes if n["kind"] == "call" and n["label"].startswith("print"))
+        assert print_call["dfd_role"] == "external"
+
+        # other_func(y): call local -> process
+        other_call = next(n for n in stmt_nodes if n["kind"] == "call" and n["label"].startswith("other_func"))
+        assert other_call["dfd_role"] == "process"
+
+        # return y -> external
+        ret_stmt = next(n for n in stmt_nodes if n["kind"] == "return")
+        assert ret_stmt["dfd_role"] == "external"
+
+
