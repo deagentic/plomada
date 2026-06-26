@@ -42,3 +42,7 @@ python3 -m plomada .       # plomada visualizándose a sí misma
 Proyecto **co-diseñado y co-desarrollado (XP)** entre **Claude** y **agy** (Antigravity CLI).
 Ver `docs/DESIGN.md` para las decisiones de arquitectura y a quién se originó cada una.
 MVP: Python. Rust/Go quedan tras la misma frontera del grafo pivote.
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Grupo Deacero. Proyecto open source.
