@@ -49,7 +49,8 @@ svg{display:block}
 .node.sel rect{stroke-width:3.5}
 .edge.hot{opacity:1;stroke-width:2.4}
 .node text.loop{fill:#c5221f;font-size:14px;font-weight:700}
-#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim)}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none}
+#empty[hidden]{display:none}
 #legend{position:fixed;right:16px;bottom:16px;background:var(--panel);border:1px solid var(--line);
 border-radius:8px;padding:10px 12px;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 #legend div{display:flex;align-items:center;gap:6px;margin:3px 0}
