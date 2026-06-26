@@ -397,56 +397,90 @@ def _function_flowchart(func, file_rel, func_id, name_index):
     start = add("start", "inicio", func.lineno)
     end = add("end", "fin", func.lineno)
 
-    def walk(stmts, incoming):
+    def walk(stmts, incoming, break_targets=None, continue_target=None):
         cur = list(incoming)                         # [(src_id, label)]
         for st in stmts:
+            if not cur:
+                return []                            # Código inalcanzable
             line = getattr(st, "lineno", func.lineno)
             if isinstance(st, ast.Return):
-                r = add("process", "return " + (_safe_unparse(st.value, 16) if st.value else ""), line)
-                for s, l in cur:
-                    link(s, r, l)
+                r = add("return", "return " + (_safe_unparse(st.value, 16) if st.value else ""), line)
+                for s, lbl in cur:
+                    link(s, r, lbl)
                 link(r, end)
                 return []                            # lo siguiente es inalcanzable
+            elif isinstance(st, ast.Break):
+                b = add("process", "break", line)
+                for s, lbl in cur:
+                    link(s, b, lbl)
+                if break_targets is not None:
+                    break_targets.append((b, None))
+                return []
+            elif isinstance(st, ast.Continue):
+                c = add("process", "continue", line)
+                for s, lbl in cur:
+                    link(s, c, lbl)
+                if continue_target is not None:
+                    link(c, continue_target)
+                return []
             elif isinstance(st, ast.If):
                 d = add("decision", _safe_unparse(st.test, 22) + " ?", line)
-                for s, l in cur:
-                    link(s, d, l)
-                t_true = walk(st.body, [(d, "Sí")])
-                t_false = walk(st.orelse, [(d, "No")]) if st.orelse else [(d, "No")]
+                for s, lbl in cur:
+                    link(s, d, lbl)
+                t_true = walk(st.body, [(d, "Sí")], break_targets, continue_target)
+                t_false = walk(st.orelse, [(d, "No")], break_targets, continue_target) if st.orelse else [(d, "No")]
                 cur = t_true + t_false
             elif isinstance(st, ast.While):
                 d = add("decision", "mientras " + _safe_unparse(st.test, 16) + " ?", line)
-                for s, l in cur:
-                    link(s, d, l)
-                for s, l in walk(st.body, [(d, "Sí")]):
-                    link(s, d, l)                    # back-edge
-                cur = [(d, "No")]
+                for s, lbl in cur:
+                    link(s, d, lbl)
+                my_breaks = []
+                body_exits = walk(st.body, [(d, "Sí")], break_targets=my_breaks, continue_target=d)
+                for s, lbl in body_exits:
+                    link(s, d, lbl)
+                normal_exit = [(d, "No")]
+                if st.orelse:
+                    normal_exit = walk(st.orelse, normal_exit, break_targets, continue_target)
+                cur = normal_exit + my_breaks
             elif isinstance(st, (ast.For, ast.AsyncFor)):
                 lp = add("loop", "para " + (", ".join(_stmt_targets(st.target)) or "_")
                          + " en " + _safe_unparse(st.iter, 12), line)
-                for s, l in cur:
-                    link(s, lp, l)
-                for s, l in walk(st.body, [(lp, "ciclo")]):
-                    link(s, lp, l)                   # back-edge
-                cur = [(lp, "fin")]
+                for s, lbl in cur:
+                    link(s, lp, lbl)
+                my_breaks = []
+                body_exits = walk(st.body, [(lp, "ciclo")], break_targets=my_breaks, continue_target=lp)
+                for s, lbl in body_exits:
+                    link(s, lp, lbl)
+                normal_exit = [(lp, "fin")]
+                if st.orelse:
+                    normal_exit = walk(st.orelse, normal_exit, break_targets, continue_target)
+                cur = normal_exit + my_breaks
             elif isinstance(st, (ast.With, ast.AsyncWith)):
-                cur = walk(st.body, cur)             # transparente
+                cur = walk(st.body, cur, break_targets, continue_target)
             elif isinstance(st, ast.Try):
-                cur = walk(st.body, cur)
+                body_exits = walk(st.body, cur, break_targets, continue_target)
+                if st.orelse:
+                    body_exits = walk(st.orelse, body_exits, break_targets, continue_target)
+                handler_exits = []
+                for handler in st.handlers:
+                    handler_exits.extend(walk(handler.body, cur, break_targets, continue_target))
+                combined_exits = body_exits + handler_exits
                 if st.finalbody:
-                    cur = walk(st.finalbody, cur)
+                    cur = walk(st.finalbody, combined_exits, break_targets, continue_target)
+                else:
+                    cur = combined_exits
             elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
             else:
                 kind, label = _classify_stmt(st, name_index)
                 n = add(kind, label, line)
-                for s, l in cur:
-                    link(s, n, l)
+                for s, lbl in cur:
+                    link(s, n, lbl)
                 cur = [(n, None)]
         return cur
 
-    for s, l in walk(func.body, [(start, None)]):
-        link(s, end, l)
+    for s, lbl in walk(func.body, [(start, None)]):
+        link(s, end, lbl)
     return nodes, edges
 
 

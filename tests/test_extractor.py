@@ -1,6 +1,5 @@
 import os
 import tempfile
-import shutil
 from plomada import extractor
 
 def test_package_collapse():
@@ -232,6 +231,53 @@ def test_function_flowchart_control_flow():
         dec = next(n for n in flow if n["kind"] == "decision")
         dec_out = [e.get("label") for e in cf if e["src"] == dec["id"]]
         assert set(dec_out) == {"Sí", "No"}
+
+
+def test_function_flowchart_enhanced_control_flow():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg = os.path.join(tmpdir, "pkg"); os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(pkg, "f_enhanced.py"), "w").write(
+            "def complex_flow(items):\n"
+            "    # Bucle con break, continue, else\n"
+            "    for x in items:\n"
+            "        if x == 0:\n"
+            "            continue\n"
+            "        elif x == 999:\n"
+            "            break\n"
+            "    else:\n"
+            "        print('natural_end')\n"
+            "    \n"
+            "    # Código inalcanzable\n"
+            "    return 42\n"
+            "    unreachable_val = 100\n"
+        )
+        res = extractor.extract(tmpdir)
+        fid = next(n["id"] for n in res["nodes"] if n["kind"] == "function" and n["label"] == "complex_flow")
+        flow = [n for n in res["nodes"] if n["parent_id"] == fid and n.get("graph_type") == "flow"]
+        fids = {n["id"] for n in flow}
+        
+        # Verificar que no hay ningún nodo para 'unreachable_val = 100'
+        assert not any("unreachable" in (n.get("label") or "") for n in flow)
+        
+        # Verificar que hay un nodo break y continue en los kind de statements
+        # Aunque sus kinds son process, sus etiquetas son "break" y "continue"
+        break_node = next(n for n in flow if n["label"] == "break")
+        continue_node = next(n for n in flow if n["label"] == "continue")
+        
+        cf = [e for e in res["edges"] if e.get("type") == "control_flow" and e["src"] in fids]
+        
+        # El continue debe enlazarse de vuelta al loop
+        loop_node = next(n for n in flow if n["kind"] == "loop")
+        continue_edge = next(e for e in cf if e["src"] == continue_node["id"])
+        assert continue_edge["dst"] == loop_node["id"]
+        
+        # El break debe saltar el else (su salida va directo a la salida del loop/siguiente sentencia o fin)
+        # O en este caso, se enruta a la cola de salida y va hacia 'return 42'
+        return_node = next(n for n in flow if n["kind"] == "return")
+        break_edge = next(e for e in cf if e["src"] == break_node["id"])
+        assert break_edge["dst"] == return_node["id"]
+
 
 
 
