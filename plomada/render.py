@@ -46,6 +46,9 @@ svg{display:block}
 .edge.unresolved{stroke-dasharray:4 3;opacity:.3}
 .node.sel rect{stroke-width:3}
 .edge.hot{opacity:1;stroke-width:2.4}
+.edge.loop{stroke:#c5221f;stroke-width:2.2;opacity:.9;marker-end:url(#arrowLoop)}
+.node.recursive rect{stroke:#c5221f;stroke-width:2.5}
+.node text.loop{fill:#c5221f;font-size:14px;font-weight:700}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim)}
 #legend{position:fixed;right:16px;bottom:16px;background:var(--panel);border:1px solid var(--line);
 border-radius:8px;padding:10px 12px;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
@@ -99,10 +102,12 @@ function draw(){
   const st=G.stats||{};
   document.getElementById("stats").innerHTML =
     `<span><b>${st.packages??""}</b> paquetes</span><span><b>${st.modules??""}</b> módulos</span>`+
-    `<span><b>${st.functions??""}</b> funciones</span><span><b>${st.calls??""}</b> llamadas</span>`;
-  // defs (arrow)
+    `<span><b>${st.functions??""}</b> funciones</span><span><b>${st.calls??""}</b> llamadas</span>`+
+    (st.loops?`<span style="color:#c5221f"><b>${st.loops}</b> loops · ${st.recursive_functions} recursivas</span>`:"");
+  // defs (arrows: normal + loop)
   const defs=document.createElementNS(SVGNS,"defs");
-  defs.innerHTML='<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5f6368"/></marker>';
+  defs.innerHTML='<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5f6368"/></marker>'+
+    '<marker id="arrowLoop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c5221f"/></marker>';
   svg.appendChild(defs);
   // layout grid (determinista)
   const cols=Math.max(1,Math.floor((window.innerWidth-2*PAD)/(NW+GAPX)));
@@ -119,7 +124,7 @@ function draw(){
     const my=(y1+y2)/2;
     const p=document.createElementNS(SVGNS,"path");
     p.setAttribute("d",`M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`);
-    p.setAttribute("class","edge "+e.type+(e.resolved===false?" unresolved":""));
+    p.setAttribute("class","edge "+e.type+(e.resolved===false?" unresolved":"")+(e.in_cycle?" loop":""));
     p.dataset.src=e.src;p.dataset.dst=e.dst;
     svg.appendChild(p);
   }
@@ -127,7 +132,7 @@ function draw(){
   kids.forEach(n=>{
     const p=pos[n.id];
     const g=document.createElementNS(SVGNS,"g");
-    g.setAttribute("class",`node kind-${n.kind}`+(childrenOf[n.id].length?" has-children":"")+(selected===n.id?" sel":""));
+    g.setAttribute("class",`node kind-${n.kind}`+(childrenOf[n.id].length?" has-children":"")+(selected===n.id?" sel":"")+(n.recursive?" recursive":""));
     g.setAttribute("transform",`translate(${p.x},${p.y})`);
     const r=document.createElementNS(SVGNS,"rect");
     r.setAttribute("width",NW);r.setAttribute("height",NH);r.setAttribute("rx",8);
@@ -140,6 +145,12 @@ function draw(){
     const nk=childrenOf[n.id].length;
     s.textContent=KIND[n.kind]+(nk?` · ${nk} dentro`:"")+(n.kind!=="package"&&n.kind!=="module"&&n.line?` · L${n.line}`:"");
     g.appendChild(s);
+    if(n.recursive){  // badge de loop/recursión
+      const lp=document.createElementNS(SVGNS,"text");
+      lp.setAttribute("class","loop");lp.setAttribute("x",NW-22);lp.setAttribute("y",24);
+      lp.textContent="↺"; lp.appendChild(document.createElementNS(SVGNS,"title")).textContent="recursión / en un ciclo";
+      g.appendChild(lp);
+    }
     g.onclick=()=>{ if(childrenOf[n.id].length){focus=n.id;selected=null;} else {selected=selected===n.id?null:n.id;} draw(); };
     svg.appendChild(g);
   });
