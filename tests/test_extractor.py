@@ -105,7 +105,7 @@ def compute(a, b):
         compute_id = next(f["id"] for f in func_nodes if f["label"] == "compute")
         
         # Obtener los statement nodes de compute
-        stmt_nodes = [n for n in res["nodes"] if n["level"] == "statement" and n["parent_id"] == compute_id]
+        stmt_nodes = [n for n in res["nodes"] if n["level"] == "statement" and n["parent_id"] == compute_id and n.get("graph_type") == "dfd"]
         
         # Verificar que no hay nodos de tipo loop/branch
         assert not any(n["kind"] in ("loop", "branch") for n in stmt_nodes)
@@ -165,7 +165,7 @@ def test_func(self, data):
         func_node = next(n for n in res["nodes"] if n["kind"] == "function" and n["label"] == "test_func")
         func_id = func_node["id"]
         
-        stmt_nodes = [n for n in res["nodes"] if n["parent_id"] == func_id and n["level"] == "statement"]
+        stmt_nodes = [n for n in res["nodes"] if n["parent_id"] == func_id and n["level"] == "statement" and n.get("graph_type") == "dfd"]
         
         # 1. Walrus operator
         # Debe haber un proceso assign para 'x := 42'
@@ -200,6 +200,38 @@ def test_func(self, data):
         
         sub_to_data = next(e for e in res["edges"] if e["src"] == sub_assign["id"] and e["dst"] == data_param["id"])
         assert sub_to_data["var"] == "data"
+
+
+def test_function_flowchart_control_flow():
+    # Vista Flowchart (control de flujo): if->rombo Sí/No, for->ciclo, return->fin
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg = os.path.join(tmpdir, "pkg"); os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(pkg, "f.py"), "w").write(
+            "def compute(items):\n"
+            "    total = 0\n"
+            "    for x in items:\n"
+            "        if x > 0:\n"
+            "            total = total + x\n"
+            "    return total\n")
+        res = extractor.extract(tmpdir)
+        fid = next(n["id"] for n in res["nodes"] if n["kind"] == "function" and n["label"] == "compute")
+        flow = [n for n in res["nodes"] if n["parent_id"] == fid and n.get("graph_type") == "flow"]
+        dfd = [n for n in res["nodes"] if n["parent_id"] == fid and n.get("graph_type") == "dfd"]
+
+        # ambas vistas coexisten (toggle)
+        assert flow and dfd
+        kinds = {n["kind"] for n in flow}
+        assert {"start", "end", "decision", "loop"} <= kinds      # símbolos de control
+        # aristas de control con etiquetas Sí/No en la decisión
+        fids = {n["id"] for n in flow}
+        cf = [e for e in res["edges"] if e.get("type") == "control_flow" and e["src"] in fids]
+        labels = {e.get("label") for e in cf}
+        assert "Sí" in labels and "No" in labels
+        # la decisión tiene exactamente dos salidas etiquetadas
+        dec = next(n for n in flow if n["kind"] == "decision")
+        dec_out = [e.get("label") for e in cf if e["src"] == dec["id"]]
+        assert set(dec_out) == {"Sí", "No"}
 
 
 

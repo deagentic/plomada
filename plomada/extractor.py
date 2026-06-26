@@ -347,6 +347,109 @@ def _function_dfd(func, file_rel, func_id, name_index):
     return nodes, edges
 
 
+def _classify_stmt(st, name_index):
+    """Clasifica una sentencia secuencial en su símbolo de flowchart."""
+    if isinstance(st, (ast.Assign, ast.AnnAssign)) and isinstance(getattr(st, "value", None), ast.Call):
+        fn = st.value.func
+        nm = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        if nm == "input":
+            return "read", "leer " + (", ".join(_stmt_targets(st)) or "")
+        if nm in name_index:
+            return "call", _safe_unparse(st.value, 26)
+    if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
+        fn = st.value.func
+        nm = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        if nm == "print":
+            return "write", "escribir " + _safe_unparse(st.value, 20)
+        if nm in name_index:
+            return "call", _safe_unparse(st.value, 26)
+        return "process", _safe_unparse(st.value, 28)
+    if isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        tg = ", ".join(_stmt_targets(st)) or "?"
+        val = getattr(st, "value", None)
+        return "assign", tg + (" = " + _safe_unparse(val, 16) if val else "")
+    return "process", _safe_unparse(st, 26)
+
+
+def _function_flowchart(func, file_rel, func_id, name_index):
+    """Diagrama de FLUJO (control) estilo ISO 5807 / DFD-SMART: inicio/fin (óvalo),
+    asignación/proceso (rectángulo), decisión (rombo), lectura/escritura (paralelogramo),
+    llamada (subprograma), ciclo. Aristas = control de flujo con etiquetas Sí/No.
+    walk(stmts, incoming) devuelve las colas [(src_id,label)] pendientes de enlazar."""
+    nodes, edges = [], []
+    counter = [0]
+
+    def add(kind, label, line):
+        counter[0] += 1
+        i = f"{func_id}#c{counter[0]}@{line}"
+        nodes.append({"id": i, "level": "statement", "parent_id": func_id, "label": label,
+                      "kind": kind, "file": file_rel, "line": line, "graph_type": "flow"})
+        edges.append({"src": func_id, "dst": i, "type": "contains", "resolved": True,
+                      "graph_type": "flow"})
+        return i
+
+    def link(src, dst, label=None):
+        e = {"src": src, "dst": dst, "type": "control_flow", "resolved": True, "graph_type": "flow"}
+        if label:
+            e["label"] = label
+        edges.append(e)
+
+    start = add("start", "inicio", func.lineno)
+    end = add("end", "fin", func.lineno)
+
+    def walk(stmts, incoming):
+        cur = list(incoming)                         # [(src_id, label)]
+        for st in stmts:
+            line = getattr(st, "lineno", func.lineno)
+            if isinstance(st, ast.Return):
+                r = add("process", "return " + (_safe_unparse(st.value, 16) if st.value else ""), line)
+                for s, l in cur:
+                    link(s, r, l)
+                link(r, end)
+                return []                            # lo siguiente es inalcanzable
+            elif isinstance(st, ast.If):
+                d = add("decision", _safe_unparse(st.test, 22) + " ?", line)
+                for s, l in cur:
+                    link(s, d, l)
+                t_true = walk(st.body, [(d, "Sí")])
+                t_false = walk(st.orelse, [(d, "No")]) if st.orelse else [(d, "No")]
+                cur = t_true + t_false
+            elif isinstance(st, ast.While):
+                d = add("decision", "mientras " + _safe_unparse(st.test, 16) + " ?", line)
+                for s, l in cur:
+                    link(s, d, l)
+                for s, l in walk(st.body, [(d, "Sí")]):
+                    link(s, d, l)                    # back-edge
+                cur = [(d, "No")]
+            elif isinstance(st, (ast.For, ast.AsyncFor)):
+                lp = add("loop", "para " + (", ".join(_stmt_targets(st.target)) or "_")
+                         + " en " + _safe_unparse(st.iter, 12), line)
+                for s, l in cur:
+                    link(s, lp, l)
+                for s, l in walk(st.body, [(lp, "ciclo")]):
+                    link(s, lp, l)                   # back-edge
+                cur = [(lp, "fin")]
+            elif isinstance(st, (ast.With, ast.AsyncWith)):
+                cur = walk(st.body, cur)             # transparente
+            elif isinstance(st, ast.Try):
+                cur = walk(st.body, cur)
+                if st.finalbody:
+                    cur = walk(st.finalbody, cur)
+            elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            else:
+                kind, label = _classify_stmt(st, name_index)
+                n = add(kind, label, line)
+                for s, l in cur:
+                    link(s, n, l)
+                cur = [(n, None)]
+        return cur
+
+    for s, l in walk(func.body, [(start, None)]):
+        link(s, end, l)
+    return nodes, edges
+
+
 def _walk_funcs(tree):
     """(qualname, FunctionDef) con stack de qualname, igual que _ModuleVisitor."""
     out = []
@@ -381,7 +484,8 @@ def extract(project_root):
     name_index = {}     # nombre simple -> [ids]
     symbol_by_dotted = {}   # "pkg.mod.Clase.metodo" -> id
 
-    def add_node(nid, level, parent, label, kind, file, line, dfd_role=None, in_loop=None):
+    def add_node(nid, level, parent, label, kind, file, line, dfd_role=None, in_loop=None,
+                 graph_type=None):
         node = {
             "id": nid,
             "level": level,
@@ -395,6 +499,8 @@ def extract(project_root):
             node["dfd_role"] = dfd_role
         if in_loop:
             node["in_loop"] = True
+        if graph_type:                       # "dfd" (flujo de datos) | "flow" (control/flowchart)
+            node["graph_type"] = graph_type
         nodes.setdefault(nid, node)
 
     add_node(_package_id(""), "package", None, os.path.basename(project_root), "package", ".", 0)
@@ -463,7 +569,7 @@ def extract(project_root):
             continue
         _CallVisitor(file_rel, mv.defs, name_index, symbol_by_dotted, alias_map, edges).visit(tree)
 
-    # PASADA 3: DFD intra-función (sentencias + data_flow + loops for/while)
+    # PASADA 3: vistas intra-función — DFD (datos) y Flowchart (control de flujo)
     for file_rel, mv in modules:
         try:
             tree = ast.parse(open(os.path.join(project_root, file_rel), encoding="utf-8").read(),
@@ -474,10 +580,20 @@ def extract(project_root):
             d = mv.defs.get(qual)
             if not d:
                 continue
+            # vista DFD (flujo de datos)
             sn, se = _function_dfd(fnode, file_rel, d["id"], name_index)
             for n in sn:
-                add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"], n["line"], n.get("dfd_role"), n.get("in_loop"))
+                add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"],
+                         n["line"], n.get("dfd_role"), n.get("in_loop"), graph_type="dfd")
+            for e in se:
+                e.setdefault("graph_type", "dfd")
             edges.extend(se)
+            # vista Flowchart (control de flujo)
+            fn_, fe = _function_flowchart(fnode, file_rel, d["id"], name_index)
+            for n in fn_:
+                add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"],
+                         n["line"], graph_type="flow")
+            edges.extend(fe)
 
     # Colapsar cadenas de paquetes de un solo hijo
     while True:
