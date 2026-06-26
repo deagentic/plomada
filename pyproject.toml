@@ -14,3 +14,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["plomada"]
+
+[tool.pytest.ini_options]
+# tests/ no es paquete; importlib + pythonpath hace que `pytest` corra sin flags extra
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]
