@@ -38,22 +38,22 @@ def _signature(func):
     params = []
     for arg, dflt in zip(pos, pad + defaults):
         params.append({"name": arg.arg,
-                       "type": _safe_unparse(arg.annotation, 40) if arg.annotation else None,
-                       "default": _safe_unparse(dflt, 20) if dflt is not None else None})
+                       "type": _safe_unparse(arg.annotation) if arg.annotation else None,
+                       "default": _safe_unparse(dflt) if dflt is not None else None})
     if a.vararg:
         params.append({"name": "*" + a.vararg.arg,
-                       "type": _safe_unparse(a.vararg.annotation, 40) if a.vararg.annotation else None,
+                       "type": _safe_unparse(a.vararg.annotation) if a.vararg.annotation else None,
                        "default": None})
     for arg, dflt in zip(a.kwonlyargs, a.kw_defaults):
         params.append({"name": arg.arg,
-                       "type": _safe_unparse(arg.annotation, 40) if arg.annotation else None,
-                       "default": _safe_unparse(dflt, 20) if dflt is not None else None})
+                       "type": _safe_unparse(arg.annotation) if arg.annotation else None,
+                       "default": _safe_unparse(dflt) if dflt is not None else None})
     if a.kwarg:
         params.append({"name": "**" + a.kwarg.arg,
-                       "type": _safe_unparse(a.kwarg.annotation, 40) if a.kwarg.annotation else None,
+                       "type": _safe_unparse(a.kwarg.annotation) if a.kwarg.annotation else None,
                        "default": None})
     return {"params": params,
-            "returns": _safe_unparse(func.returns, 40) if func.returns else None}
+            "returns": _safe_unparse(func.returns) if func.returns else None}
 
 
 def _extract_comments(path):
@@ -74,12 +74,24 @@ def _extract_comments(path):
     return full, inline
 
 
-def _comment_for(full, inline, line):
+def _comment_for(full, inline, line, src=None):
     """Comentario asociado a una línea: bloque de cabecera contiguo arriba + inline."""
     parts, L = [], line - 1
     block = []
-    while L in full:                      # comentarios full-line contiguos justo encima
-        block.append(full[L]); L -= 1
+    blanks = 0
+    while L > 0:
+        if L in full:
+            block.append(full[L])
+            blanks = 0
+        else:
+            line_str = src[L - 1].strip() if src and 0 <= L - 1 < len(src) else ""
+            if line_str == "":
+                blanks += 1
+                if blanks > 1:  # límite de 1 línea vacía
+                    break
+            else:
+                break
+        L -= 1
     parts += reversed(block)
     if line in inline:
         parts.append(inline[line])
@@ -292,12 +304,12 @@ def _find_named_exprs(node):
     return exprs
 
 
-def _safe_unparse(node, n=26):
+def _safe_unparse(node, n=None):
     try:
         s = ast.unparse(node)
     except Exception:
         s = "…"
-    return s[:n]
+    return s[:n] if n is not None else s
 
 
 def _function_dfd(func, file_rel, func_id, name_index):
@@ -593,6 +605,19 @@ def extract(project_root):
     symbol_by_dotted = {}   # "pkg.mod.Clase.metodo" -> id
 
     comments_by_file = {}                     # file_rel -> (full, inline)
+    used_url_ids = set()
+
+    def get_url_id(base_str):
+        clean = re.sub(r"[^a-zA-Z0-9_.-]", "_", base_str)
+        if clean not in used_url_ids:
+            used_url_ids.add(clean)
+            return clean
+        i = 1
+        while f"{clean}-{i}" in used_url_ids:
+            i += 1
+        res = f"{clean}-{i}"
+        used_url_ids.add(res)
+        return res
 
     def add_node(nid, level, parent, label, kind, file, line, dfd_role=None, in_loop=None,
                  graph_type=None, extra=None):
@@ -618,7 +643,7 @@ def extract(project_root):
         nodes.setdefault(nid, node)
 
     add_node(_package_id(""), "package", None, os.path.basename(project_root), "package", ".", 0,
-             extra={"url_id": os.path.basename(project_root)})
+             extra={"url_id": get_url_id(os.path.basename(project_root))})
 
     py_files = _iter_py(project_root)
 
@@ -632,15 +657,17 @@ def extract(project_root):
             sub = "/".join(parts[: i + 1])
             parent = _package_id("/".join(parts[:i])) if i else _package_id("")
             add_node(_package_id(sub), "package", parent, parts[i], "package", sub, 0,
-                     extra={"url_id": sub.replace("/", ".")})
+                     extra={"url_id": get_url_id(sub.replace("/", "."))})
             edges.append({"src": parent, "dst": _package_id(sub), "type": "contains", "resolved": True})
 
     # PASADA 1: símbolos
     for f in py_files:
         file_rel = _rel(f, project_root)
         try:
-            tree = ast.parse(open(f, encoding="utf-8").read(), filename=file_rel)
-        except (SyntaxError, UnicodeDecodeError):
+            src_content = open(f, encoding="utf-8").read()
+            tree = ast.parse(src_content, filename=file_rel)
+            src_lines = src_content.splitlines()
+        except (SyntaxError, UnicodeDecodeError, OSError):
             continue
         dotted = _dotted(file_rel)
         mv = _ModuleVisitor(file_rel, dotted)
@@ -652,12 +679,12 @@ def extract(project_root):
         pkg_parent = _package_id("" if pkg_rel == "." else pkg_rel)
         mid = _module_id(file_rel)
         add_node(mid, "module", pkg_parent, dotted, "module", file_rel, 0,
-                 extra={"url_id": dotted, "doc": mod_doc, "adrs": _find_adrs(mod_doc)})
+                 extra={"url_id": get_url_id(dotted), "doc": mod_doc, "adrs": _find_adrs(mod_doc)})
         edges.append({"src": pkg_parent, "dst": mid, "type": "contains", "resolved": True})
         for q, d in mv.defs.items():
-            cmt = _comment_for(full, inline, d["line"])
+            cmt = _comment_for(full, inline, d["line"], src_lines)
             add_node(d["id"], "function", mid, q, d["kind"], file_rel, d["line"],
-                     extra={"url_id": f"{dotted}.{q}", "doc": d.get("doc"),
+                     extra={"url_id": get_url_id(f"{dotted}.{q}"), "doc": d.get("doc"),
                             "signature": d.get("signature"), "comment": cmt,
                             "adrs": _find_adrs(d.get("doc"), cmt)})
             name_index.setdefault(q.split(".")[-1], []).append(d["id"])
@@ -696,14 +723,15 @@ def extract(project_root):
     # PASADA 3: vistas intra-función — DFD (datos) y Flowchart (control de flujo)
     for file_rel, mv in modules:
         try:
-            tree = ast.parse(open(os.path.join(project_root, file_rel), encoding="utf-8").read(),
-                             filename=file_rel)
-        except (SyntaxError, UnicodeDecodeError):
+            src_content = open(os.path.join(project_root, file_rel), encoding="utf-8").read()
+            tree = ast.parse(src_content, filename=file_rel)
+            src_lines = src_content.splitlines()
+        except (SyntaxError, UnicodeDecodeError, OSError):
             continue
         full, inline = comments_by_file.get(file_rel, ({}, {}))
 
         def _stmt_extra(line):                  # comentario/ADR anclado a la línea
-            cmt = _comment_for(full, inline, line)   # bloque full-line arriba + inline
+            cmt = _comment_for(full, inline, line, src_lines)   # bloque full-line arriba + inline
             return {"comment": cmt, "adrs": _find_adrs(cmt)} if cmt else None
 
         for qual, fnode in _walk_funcs(tree):

@@ -310,8 +310,27 @@ def test_docs_types_comments_url():
         params = {p["name"]: p for p in sig["params"]}
         assert params["nombre"]["type"] == "str"
         assert params["veces"]["type"] == "int" and params["veces"]["default"] == "1"
-
         # comentario (cabecera + inline) y ADR anclados a la sentencia msg
         msg_nodes = [n for n in res["nodes"] if n["level"] == "statement"
                      and n.get("comment") and "ADR-0042" in n.get("adrs", [])]
         assert msg_nodes, "el comentario/ADR debe anclarse a la sentencia"
+
+
+def test_url_id_collision():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Crear estructura que colisione:
+        # tmpdir/
+        #   coll/             -> paquete coll (su url_id será "coll")
+        #     __init__.py
+        #   coll.py           -> módulo coll (su url_id colisionará y será "coll-1")
+        pkg = os.path.join(tmpdir, "coll")
+        os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(tmpdir, "coll.py"), "w").write(
+            "def foo():\n"
+            "    pass\n"
+        )
+        res = extractor.extract(tmpdir)
+        nodes_by_url = {n["url_id"]: n for n in res["nodes"] if "url_id" in n}
+        assert "coll" in nodes_by_url
+        assert "coll-1" in nodes_by_url
