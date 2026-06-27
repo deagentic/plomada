@@ -414,6 +414,8 @@ def _function_dfd(func, file_rel, func_id, name_index):
             elif isinstance(st, ast.Expr):
                 if isinstance(st.value, ast.NamedExpr):
                     continue
+                if isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                    continue                       # docstring / string suelto → no es nodo del grafo
                 kind = "call" if isinstance(st.value, ast.Call) else "expr"
                 role = "process"
                 if kind == "call":
@@ -557,6 +559,8 @@ def _function_flowchart(func, file_rel, func_id, name_index):
                     cur = combined_exits
             elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
+            elif isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                continue                           # docstring / string suelto → no es nodo del flowchart
             else:
                 kind, label = _classify_stmt(st, name_index)
                 n = add(kind, label, line)

@@ -147,7 +147,7 @@ window.setGraphType = function(type) {
 
 const KIND={package:"paquete",module:"módulo",class:"clase",function:"función",method:"método",
   statement:"sentencia",assign:"asignación",loop:"loop",branch:"rama",return:"return",call:"llamada",expr:"expr",
-  store:"almacén",parameter:"parámetro",iterate:"bucle",start:"inicio",end:"fin",decision:"decisión",read:"lectura",write:"escritura"};
+  store:"almacén",parameter:"parámetro",iterate:"bucle",start:"inicio",end:"fin",decision:"decisión",read:"lectura",write:"escritura",process:"proceso"};
 const NW=210, NH=52, GAPX=46, GAPY=70, PAD=40;
 
 function ancestors(id){const out=[];let c=byId[id];while(c){out.unshift(c);c=c.parent_id?byId[c.parent_id]:null;}return out;}
