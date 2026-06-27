@@ -281,3 +281,79 @@ def test_function_flowchart_enhanced_control_flow():
 
 
 
+
+
+def test_docs_types_comments_url():
+    # docstrings + firma de tipos + comentarios/ADR + url_id
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg = os.path.join(tmpdir, "pkg"); os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(pkg, "m.py"), "w").write(
+            '"""Módulo demo. Ver ADR-0001."""\n'
+            "def saluda(nombre: str, veces: int = 1) -> str:\n"
+            '    """Devuelve un saludo."""\n'
+            "    # implementa ADR-0042\n"
+            "    msg = nombre * veces  # arma el mensaje\n"
+            "    return msg\n")
+        res = extractor.extract(tmpdir)
+
+        mod = next(n for n in res["nodes"] if n.get("url_id") == "pkg.m")
+        assert mod["doc"].startswith("Módulo demo")
+        assert "ADR-0001" in mod.get("adrs", [])
+        assert mod["url_id"] == "pkg.m"
+
+        fn = next(n for n in res["nodes"] if n["label"] == "saluda")
+        assert fn["doc"] == "Devuelve un saludo."
+        assert fn["url_id"] == "pkg.m.saluda"
+        sig = fn["signature"]
+        assert sig["returns"] == "str"
+        params = {p["name"]: p for p in sig["params"]}
+        assert params["nombre"]["type"] == "str"
+        assert params["veces"]["type"] == "int" and params["veces"]["default"] == "1"
+        # comentario (cabecera + inline) y ADR anclados a la sentencia msg
+        msg_nodes = [n for n in res["nodes"] if n["level"] == "statement"
+                     and n.get("comment") and "ADR-0042" in n.get("adrs", [])]
+        assert msg_nodes, "el comentario/ADR debe anclarse a la sentencia"
+
+
+def test_url_id_collision():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Crear estructura que colisione:
+        # tmpdir/
+        #   coll/             -> paquete coll (su url_id será "coll")
+        #     __init__.py
+        #   coll.py           -> módulo coll (su url_id colisionará y será "coll-1")
+        pkg = os.path.join(tmpdir, "coll")
+        os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(tmpdir, "coll.py"), "w").write(
+            "def foo():\n"
+            "    pass\n"
+        )
+        res = extractor.extract(tmpdir)
+        nodes_by_url = {n["url_id"]: n for n in res["nodes"] if "url_id" in n}
+        assert "coll" in nodes_by_url
+        assert "coll-1" in nodes_by_url
+
+
+def test_navigation_callers_source():
+    # callee_url_id (navegar a la función llamada), callers ("usado en"), source
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg = os.path.join(tmpdir, "pkg"); os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(pkg, "m.py"), "w").write(
+            "def helper(x: int) -> int:\n    return x + 1\n\n"
+            "def main(n: int):\n    y = helper(n)\n    return y\n")
+        res = extractor.extract(tmpdir)
+        byid = {n["id"]: n for n in res["nodes"]}
+        helper = next(n for n in res["nodes"] if n["label"] == "helper")
+        main = next(n for n in res["nodes"] if n["label"] == "main")
+
+        # callers: helper es usado por main
+        assert any(c["label"] == "main" for c in helper.get("callers", []))
+        # source de la función
+        assert main.get("source", "").startswith("def main")
+        # nodo call del flowchart de main navega a helper
+        call_nodes = [n for n in res["nodes"] if n.get("parent_id") == main["id"]
+                      and n.get("graph_type") == "flow" and n.get("callee_url_id")]
+        assert any(n["callee_url_id"] == helper["url_id"] for n in call_nodes)

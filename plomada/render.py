@@ -28,7 +28,6 @@ header h1{font-size:18px;font-weight:500;margin:0;color:var(--blue)}
 #crumbs a{color:var(--blue);cursor:pointer;text-decoration:none}#crumbs span.sep{color:var(--dim)}
 #stats{margin-left:auto;color:var(--dim);font-size:12px;display:flex;gap:14px}
 #stats b{color:var(--ink);font-weight:500}
-#stage{flex:1;position:relative;overflow:auto}
 svg{display:block}
 .node{cursor:pointer}
 .node rect,.node path,.node polygon{stroke-width:1.5;transition:filter .12s}
@@ -68,16 +67,41 @@ svg{display:block}
 .node text.loop{fill:#c5221f;font-size:14px;font-weight:700}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none}
 #empty[hidden]{display:none}
-#legend{position:fixed;right:16px;bottom:16px;background:var(--panel);border:1px solid var(--line);
-border-radius:8px;padding:10px 12px;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+#legend{position:fixed;right:336px;bottom:16px;background:var(--panel);border:1px solid var(--line);
+border-radius:8px;padding:10px 12px;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);z-index:9}
 #legend div{display:flex;align-items:center;gap:6px;margin:3px 0}
 #legend i{width:12px;height:12px;border-radius:3px;display:inline-block;border:1px solid}
 
-/* Estilos de toggle y etiquetas */
+/* Estilos de toggle, panel lateral y etiquetas */
 #view-toggle-container{display:none;background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:2px;gap:2px;margin:0 12px}
 .toggle-btn{border:none;background:transparent;padding:6px 14px;border-radius:18px;cursor:pointer;font-size:12px;font-weight:500;color:var(--dim);transition:all .2s ease}
 .toggle-btn.active{background:var(--panel);color:var(--blue);box-shadow:0 1px 3px rgba(0,0,0,.1)}
 .control-label{fill:var(--dim);font-size:10px;font-weight:500;text-anchor:middle;paint-order:stroke;stroke:var(--bg);stroke-width:4px}
+
+#workspace{flex:1;display:flex;position:relative;overflow:hidden}
+#stage{flex:1;position:relative;overflow:auto}
+#doc-panel{width:320px;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-2px 0 6px rgba(0,0,0,.04);z-index:10;transition:width .2s ease,opacity .2s ease}
+#doc-panel.collapsed{width:0;opacity:0;pointer-events:none;border-left:none}
+.panel-header{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+.panel-header h2{font-size:15px;font-weight:500;margin:0;color:var(--blue)}
+.close-btn{background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--dim);line-height:1;padding:0}
+#panel-content{padding:18px;overflow-y:auto;flex:1;font-size:13px;line-height:1.5}
+.doc-section{margin-bottom:20px}
+.doc-section h3{font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);margin:0 0 8px 0;letter-spacing:.5px}
+.docstring{background:#f8f9fa;border-left:3px solid var(--blue);padding:8px 12px;border-radius:0 4px 4px 0;white-space:pre-wrap;font-family:inherit;margin:0}
+.signature-box{background:#f1f3f4;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;overflow-x:auto;border:1px solid var(--line)}
+.sig-param{margin-bottom:4px}
+.sig-param:last-child{margin-bottom:0}
+.sig-param-name{color:var(--ink);font-weight:700}
+.sig-param-type{color:#c5221f}
+.sig-param-default{color:var(--dim)}
+.src-code{background:#f8f9fa;border:1px solid var(--line);border-radius:4px;padding:8px;font:11px/1.45 ui-monospace,SFMono-Regular,monospace;white-space:pre;overflow:auto;max-height:260px;margin:0}
+.callers{display:flex;flex-wrap:wrap;gap:6px}
+.caller-link{color:var(--blue);cursor:pointer;font-size:12px;background:#e8f0fe;border-radius:10px;padding:2px 10px;text-decoration:none}
+.caller-link:hover{background:#d2e3fc}
+.sig-returns{margin-top:8px;border-top:1px solid var(--line);padding-top:6px;font-weight:700}
+.adr-badge-list{display:flex;flex-wrap:wrap;gap:6px}
+.adr-badge{background:#fce8e6;color:#c5221f;border:1px solid #c5221f;padding:4px 8px;border-radius:4px;font-weight:700;font-size:11px}
 </style></head><body>
 <header>
   <h1>plomada</h1>
@@ -85,7 +109,16 @@ border-radius:8px;padding:10px 12px;font-size:12px;box-shadow:0 1px 3px rgba(0,0
   <div id="view-toggle-container"></div>
   <div id="stats"></div>
 </header>
-<div id="stage"><svg id="svg"></svg><div id="empty" hidden>Vacío</div></div>
+<div id="workspace">
+  <div id="stage"><svg id="svg"></svg><div id="empty" hidden>Vacío</div></div>
+  <aside id="doc-panel">
+    <div class="panel-header">
+      <h2 id="panel-title">Detalles</h2>
+      <button class="close-btn" onclick="closePanel()">&times;</button>
+    </div>
+    <div id="panel-content"></div>
+  </aside>
+</div>
 <div id="legend"></div>
 <script>
 const G = /*__DATA__*/;
@@ -98,6 +131,18 @@ const ROOT = G.nodes.find(n=>n.level==="package" && !n.parent_id);
 let focus = ROOT ? ROOT.id : null;
 let selected = null;
 let currentGraphType = "flow";
+let panelCollapsed = false;
+
+window.closePanel = function() {
+  panelCollapsed = true;
+  document.getElementById("doc-panel").classList.add("collapsed");
+};
+
+window.openPanel = function() {
+  panelCollapsed = false;
+  document.getElementById("doc-panel").classList.remove("collapsed");
+  updatePanel();
+};
 
 window.setGraphType = function(type) {
   currentGraphType = type;
@@ -106,8 +151,8 @@ window.setGraphType = function(type) {
 
 const KIND={package:"paquete",module:"módulo",class:"clase",function:"función",method:"método",
   statement:"sentencia",assign:"asignación",loop:"loop",branch:"rama",return:"return",call:"llamada",expr:"expr",
-  store:"almacén",parameter:"parámetro",iterate:"bucle",start:"inicio",end:"fin",decision:"decisión",read:"lectura",write:"escritura"};
-const NW=210, NH=52, GAPX=46, GAPY=70, PAD=40;
+  store:"almacén",parameter:"parámetro",iterate:"bucle",start:"inicio",end:"fin",decision:"decisión",read:"lectura",write:"escritura",process:"proceso"};
+let NW=210; const NH=52, GAPX=46, GAPY=70, PAD=40;
 
 function ancestors(id){const out=[];let c=byId[id];while(c){out.unshift(c);c=c.parent_id?byId[c.parent_id]:null;}return out;}
 
@@ -123,6 +168,161 @@ function visibleEdges(ids){
   }
   return out;
 }
+
+function formatCompactSignature(sig) {
+  if (!sig || !sig.params) return "";
+  const pList = sig.params.map(p => p.name).join(", ");
+  const ret = sig.returns ? ` -> ${sig.returns}` : "";
+  const fullSig = `(${pList})${ret}`;
+  if (fullSig.length > 58) {                  // solo si es muy larga (el nodo ya se autoajusta)
+    const shortParams = sig.params.map(p => p.name).slice(0, 3).join(", ");
+    return `(${shortParams}, …)${ret}`;
+  }
+  return fullSig;
+}
+
+const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+function updatePanel() {
+  const panel = document.getElementById("doc-panel");
+  const content = document.getElementById("panel-content");
+  const title = document.getElementById("panel-title");
+  
+  if (panelCollapsed) {
+    panel.classList.add("collapsed");
+    return;
+  } else {
+    panel.classList.remove("collapsed");
+  }
+  
+  const fNode = byId[focus];
+  const sNode = selected ? byId[selected] : null;
+  let html = "";
+  
+  if (sNode) {
+    title.textContent = `Detalles de Sentencia (L${sNode.line})`;
+    html += `<div class="doc-section">
+      <h3>Tipo</h3>
+      <div><b>${KIND[sNode.kind] || sNode.kind}</b></div>
+    </div>`;
+    
+    if (sNode.label) {
+      html += `<div class="doc-section">
+        <h3>Expresión</h3>
+        <div style="font-family:monospace; background:#f8f9fa; padding:8px; border-radius:4px; border:1px solid var(--line); white-space:pre-wrap; word-break:break-all;">${esc(sNode.label)}</div>
+      </div>`;
+    }
+    
+    if (sNode.comment) {
+      html += `<div class="doc-section">
+        <h3>Comentario</h3>
+        <div class="docstring" style="border-left-color: var(--blue)">${esc(sNode.comment)}</div>
+      </div>`;
+    }
+    
+    if (sNode.adrs && sNode.adrs.length > 0) {
+      html += `<div class="doc-section">
+        <h3>ADRs Relacionados</h3>
+        <div class="adr-badge-list">
+          ${sNode.adrs.map(adr => `<span class="adr-badge">${esc(adr)}</span>`).join("")}
+        </div>
+      </div>`;
+    }
+    
+    if (fNode && (fNode.kind === "function" || fNode.kind === "method")) {
+      html += `<hr style="border:0; border-top:1px dashed var(--line); margin:20px 0" />`;
+      html += `<div style="color:var(--dim); font-size:10px; font-weight:700; text-transform:uppercase; margin-bottom:8px">Función Contenedora: ${esc(fNode.label)}</div>`;
+      if (fNode.doc) {
+        html += `<div class="doc-section">
+          <h3>Docstring</h3>
+          <pre class="docstring">${esc(fNode.doc)}</pre>
+        </div>`;
+      }
+    }
+  } else if (fNode) {
+    title.textContent = fNode.label || fNode.id;
+    html += `<div class="doc-section">
+      <h3>Tipo</h3>
+      <div><b>${KIND[fNode.kind] || fNode.kind}</b></div>
+    </div>`;
+    
+    if (fNode.doc) {
+      html += `<div class="doc-section">
+        <h3>Documentación</h3>
+        <pre class="docstring">${esc(fNode.doc)}</pre>
+      </div>`;
+    }
+    
+    if (fNode.signature && fNode.signature.params) {
+      html += `<div class="doc-section">
+        <h3>Firma de Tipos</h3>
+        <div class="signature-box">`;
+      if (fNode.signature.params.length === 0) {
+        html += `<div>(sin parámetros)</div>`;
+      } else {
+        fNode.signature.params.forEach(p => {
+          let pStr = `<div class="sig-param">`;
+          pStr += `<span class="sig-param-name">${esc(p.name)}</span>`;
+          if (p.type) pStr += `: <span class="sig-param-type">${esc(p.type)}</span>`;
+          if (p.default) pStr += ` = <span class="sig-param-default">${esc(p.default)}</span>`;
+          pStr += `</div>`;
+          html += pStr;
+        });
+      }
+      if (fNode.signature.returns) {
+        html += `<div class="sig-returns">Retorno: <span class="sig-param-type">${esc(fNode.signature.returns)}</span></div>`;
+      }
+      html += `</div></div>`;
+    }
+    
+    if (fNode.adrs && fNode.adrs.length > 0) {
+      html += `<div class="doc-section">
+        <h3>ADRs del Componente</h3>
+        <div class="adr-badge-list">
+          ${fNode.adrs.map(adr => `<span class="adr-badge">${esc(adr)}</span>`).join("")}
+        </div>
+      </div>`;
+    }
+    
+    if (fNode.comment) {
+      html += `<div class="doc-section">
+        <h3>Nota de Código</h3>
+        <div class="docstring" style="border-left-color: var(--blue)">${esc(fNode.comment)}</div>
+      </div>`;
+    }
+
+    if (fNode.source) {
+      html += `<div class="doc-section">
+        <h3>Código fuente</h3>
+        <pre class="src-code">${esc(fNode.source)}</pre>
+      </div>`;
+    }
+
+    if (fNode.callers && fNode.callers.length) {
+      html += `<div class="doc-section"><h3>Usado en (${fNode.callers.length})</h3><div class="callers">`;
+      fNode.callers.forEach(c => {
+        html += `<a class="caller-link" data-uid="${esc(c.url_id)}" title="${esc(c.url_id)}">${esc(c.label)}</a>`;
+      });
+      html += `</div></div>`;
+    }
+  } else {
+    title.textContent = "Sin selección";
+    html = `<div style="color:var(--dim); text-align:center; margin-top:40px">Selecciona un elemento para ver su documentación o comentarios.</div>`;
+  }
+  content.innerHTML = html;
+  content.querySelectorAll(".caller-link[data-uid]").forEach(a => {   // sin onclick inline (anti-XSS)
+    a.addEventListener("click", () => goToUrlId(a.dataset.uid));
+  });
+}
+
+window.goToUrlId = function(uid){            // navegar a una función por su url_id (deep-link semántico)
+  const target = G.nodes.find(n => n.url_id === uid);
+  if(!target) return;
+  if((childrenOf[target.id]||[]).length>0){ focus=target.id; selected=null; }
+  else { focus=target.parent_id||ROOT.id; selected=target.id; }
+  history.pushState(null,null,"#"+encodeURIComponent(uid));
+  draw();
+};
 
 function draw(){
   const svg=document.getElementById("svg"); svg.innerHTML="";
@@ -144,6 +344,17 @@ function draw(){
   let kids = allKids;
   if (hasGraphType) {
     kids = allKids.filter(n => n.graph_type === currentGraphType);
+  }
+  // #2 autosize: ancho de nodo (uniforme por vista) que quepa la firma/etiqueta más larga
+  {
+    let mc = 16;
+    kids.forEach(n => {
+      let t = (n.label || "").length;
+      if ((n.kind === "function" || n.kind === "method") && n.signature)
+        t = Math.max(t, formatCompactSignature(n.signature).length);
+      mc = Math.max(mc, t);
+    });
+    NW = Math.min(470, Math.max(210, Math.round(mc * 7.4 + 30)));
   }
 
   document.getElementById("empty").hidden = kids.length>0;
@@ -375,7 +586,7 @@ function draw(){
 
   const maxCols = Math.max(...layerNodes.map(a => a.length), 1);
   const pos = {};
-  const svgW = Math.max(window.innerWidth, PAD * 2 + maxCols * (NW + GAPX) - GAPX);
+  const svgW = Math.max(window.innerWidth - 340, PAD * 2 + maxCols * (NW + GAPX) - GAPX);
 
   layerNodes.forEach((nodesInLayer, layerIdx) => {
     const nInLayer = nodesInLayer.length;
@@ -416,9 +627,15 @@ function draw(){
       lx = Math.min(x1, x2) - offset;
       ly = (y1 + y2) / 2;
     } else {
-      const x1=a.x+NW/2,y1=a.y+NH,x2=b.x+NW/2,y2=b.y;
+      const srcNode = byId[e.src];
+      let x1 = a.x + NW/2, y1 = a.y + NH;          // por defecto: vértice inferior
+      if (srcNode && srcNode.kind === "decision") {
+        // Sí y No deben salir de VÉRTICES DISTINTOS del rombo (evitar confusión)
+        if (e.label === "No") { x1 = a.x + NW; y1 = a.y + NH/2; }   // vértice derecho
+        else { x1 = a.x + NW/2; y1 = a.y + NH; }                    // vértice inferior (Sí/resto)
+      }
+      const x2=b.x+NW/2, y2=b.y;
       const my=(y1+y2)/2;
-      
       pathD = `M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`;
       lx = x1 + (x2 - x1) * 0.35;
       ly = y1 + (y2 - y1) * 0.35;
@@ -482,16 +699,16 @@ function draw(){
     if (isFlowNode) {
       if (n.kind === "start" || n.kind === "end") {
         const r = mk("rect"); r.setAttribute("width", NW); r.setAttribute("height", NH); r.setAttribute("rx", 26); g.appendChild(r);
-      } else if (n.kind === "decision") {
-        const poly = mk("polygon"); poly.setAttribute("points", "105,0 210,26 105,52 0,26"); g.appendChild(poly);
+      } else if (n.kind === "decision") {       // rombo, escalado a NW (vértices: arriba/dcha/abajo/izq)
+        const poly = mk("polygon"); poly.setAttribute("points", `${NW/2},0 ${NW},${NH/2} ${NW/2},${NH} 0,${NH/2}`); g.appendChild(poly);
       } else if (n.kind === "read" || n.kind === "write") {
-        const poly = mk("polygon"); poly.setAttribute("points", "20,0 210,0 190,52 0,52"); g.appendChild(poly);
+        const poly = mk("polygon"); poly.setAttribute("points", `20,0 ${NW},0 ${NW-20},${NH} 0,${NH}`); g.appendChild(poly);
       } else if (n.kind === "call") {
         const r = mk("rect"); r.setAttribute("width", NW); r.setAttribute("height", NH); g.appendChild(r);
         const l1 = mk("line"); l1.setAttribute("class", "divider"); l1.setAttribute("x1", 15); l1.setAttribute("y1", 0); l1.setAttribute("x2", 15); l1.setAttribute("y2", NH); g.appendChild(l1);
-        const l2 = mk("line"); l2.setAttribute("class", "divider"); l2.setAttribute("x1", 195); l2.setAttribute("y1", 0); l2.setAttribute("x2", 195); l2.setAttribute("y2", NH); g.appendChild(l2);
+        const l2 = mk("line"); l2.setAttribute("class", "divider"); l2.setAttribute("x1", NW-15); l2.setAttribute("y1", 0); l2.setAttribute("x2", NW-15); l2.setAttribute("y2", NH); g.appendChild(l2);
       } else if (n.kind === "loop") {
-        const poly = mk("polygon"); poly.setAttribute("points", "15,0 195,0 210,26 195,52 15,52 0,26"); g.appendChild(poly);
+        const poly = mk("polygon"); poly.setAttribute("points", `15,0 ${NW-15},0 ${NW},${NH/2} ${NW-15},${NH} 15,${NH} 0,${NH/2}`); g.appendChild(poly);
       } else {
         const r = mk("rect"); r.setAttribute("width", NW); r.setAttribute("height", NH); g.appendChild(r);
       }
@@ -531,15 +748,14 @@ function draw(){
       t.setAttribute("text-anchor", "middle");
     }
     
-    let maxLen = 28;
+    let maxLen = Math.max(22, Math.floor((NW - 24) / 7.4));   // dinámico según ancho del nodo
     if (isFlowNode) {
-      if (n.kind === "decision") maxLen = 20;
-      else if (n.kind === "read" || n.kind === "write" || n.kind === "loop") maxLen = 22;
-      else maxLen = 26;
+      if (n.kind === "decision") maxLen = Math.floor(maxLen * 0.65);   // el rombo angosta el texto
+      else if (n.kind === "read" || n.kind === "write" || n.kind === "loop") maxLen = Math.floor(maxLen * 0.82);
     } else if (role === "store") {
-      maxLen = 20;
+      maxLen = maxLen - 4;                                    // compartimento Dn
     } else if (n.recursive) {
-      maxLen = 24;
+      maxLen = maxLen - 4;                                    // badge ↺
     }
     
     t.textContent=(n.label||n.id).slice(0, maxLen);
@@ -551,11 +767,52 @@ function draw(){
     }
     
     const nk=childrenOf[n.id].length;
-    s.textContent=KIND[n.kind]+(nk?` · ${nk} dentro`:"")+(n.kind!=="package"&&n.kind!=="module"&&n.line?` · L${n.line}`:"");
+    let subtitleText = KIND[n.kind];
+    if ((n.kind === "function" || n.kind === "method") && n.signature) {
+      subtitleText = formatCompactSignature(n.signature);
+    } else {
+      subtitleText = KIND[n.kind] + (nk ? ` · ${nk} dentro` : "") + (n.kind !== "package" && n.kind !== "module" && n.line ? ` · L${n.line}` : "");
+    }
+    s.textContent = subtitleText;
     g.appendChild(s);
     
     if(n.recursive){const lp=mk("text");lp.setAttribute("class","loop");lp.setAttribute("x",NW-22);lp.setAttribute("y",role==="process"?14:24);lp.textContent="↺";lp.appendChild(mk("title")).textContent="recursión / en un ciclo";g.appendChild(lp);}
-    g.onclick=()=>{ if(childrenOf[n.id].length){focus=n.id;selected=null;} else {selected=selected===n.id?null:n.id;} draw(); };
+    
+    // Iconos de notas de comentario y ADRs flotando sobre el nodo statement
+    if (isFlowNode || role) {
+      if (n.comment) {
+        const cGroup = mk("g");
+        cGroup.setAttribute("transform", `translate(${NW - 28}, -12)`);
+        const cRect = mk("rect"); cRect.setAttribute("width", 22); cRect.setAttribute("height", 22); cRect.setAttribute("rx", 11); cRect.setAttribute("fill", "#e8f0fe"); cRect.setAttribute("stroke", "#1a73e8"); cRect.setAttribute("stroke-width", "1"); cGroup.appendChild(cRect);
+        const cText = mk("text"); cText.setAttribute("x", 11); cText.setAttribute("y", 15); cText.setAttribute("text-anchor", "middle"); cText.setAttribute("style", "font-size:11px;cursor:help;"); cText.textContent = "💬";
+        const cTitle = mk("title"); cTitle.textContent = n.comment; cText.appendChild(cTitle);
+        cGroup.appendChild(cText);
+        g.appendChild(cGroup);
+      }
+      if (n.adrs && n.adrs.length > 0) {
+        n.adrs.forEach((adr, idx) => {
+          const aGroup = mk("g");
+          aGroup.setAttribute("transform", `translate(${8 + idx * 56}, -12)`);
+          const aRect = mk("rect"); aRect.setAttribute("width", 52); aRect.setAttribute("height", 16); aRect.setAttribute("rx", 4); aRect.setAttribute("fill", "#fce8e6"); aRect.setAttribute("stroke", "#c5221f"); aRect.setAttribute("stroke-width", "1.2"); aGroup.appendChild(aRect);
+          const aText = mk("text"); aText.setAttribute("x", 26); aText.setAttribute("y", 11); aText.setAttribute("text-anchor", "middle"); aText.setAttribute("style", "font-size:8px;font-weight:bold;fill:#c5221f"); aText.textContent = adr; aGroup.appendChild(aText);
+          g.appendChild(aGroup);
+        });
+      }
+    }
+    
+    if(n.callee_url_id) g.style.cursor="alias";   // indica que navega a otra función
+    g.onclick=(evt)=>{
+      evt.stopPropagation();
+      if(n.callee_url_id){                  // llamada → navega a la función destino
+        goToUrlId(n.callee_url_id); return;
+      }
+      if(childrenOf[n.id].length){
+        focus=n.id;selected=null;
+      } else {
+        selected=selected===n.id?null:n.id;
+      }
+      draw();
+    };
     svg.appendChild(g);
   });
   
@@ -624,7 +881,73 @@ function draw(){
       el.style.border="1px solid";
     });
   }
+
+  // Deep-linking: Actualizar location.hash según el foco actual o la selección
+  if (selected && byId[selected] && byId[selected].url_id) {
+    const targetHash = byId[selected].url_id;
+    if (decodeURIComponent(location.hash.replace("#", "")) !== targetHash) {
+      history.pushState(null, null, "#" + targetHash);
+    }
+  } else if (byId[focus] && byId[focus].url_id) {
+    const targetHash = byId[focus].url_id;
+    if (decodeURIComponent(location.hash.replace("#", "")) !== targetHash) {
+      history.pushState(null, null, "#" + targetHash);
+    }
+  }
+
+  updatePanel();
 }
-window.addEventListener("resize",draw);
+
+svg.onclick = () => {
+  selected = null;
+  draw();
+};
+
+function handleInitialHash() {
+  const hash = decodeURIComponent(location.hash.replace("#", ""));
+  if (hash) {
+    const target = G.nodes.find(n => n.url_id === hash);
+    if (target) {
+      if (childrenOf[target.id] && childrenOf[target.id].length > 0) {
+        focus = target.id;
+        selected = null;
+      } else {
+        focus = target.parent_id || ROOT.id;
+        selected = target.id;
+      }
+    }
+  }
+}
+
+window.addEventListener("hashchange", () => {
+  const hash = decodeURIComponent(location.hash.replace("#", ""));
+  if (hash) {
+    const target = G.nodes.find(n => n.url_id === hash);
+    if (target) {
+      if (childrenOf[target.id] && childrenOf[target.id].length > 0) {
+        if (focus !== target.id) {
+          focus = target.id;
+          selected = null;
+          draw();
+        }
+      } else {
+        if (focus !== target.parent_id || selected !== target.id) {
+          focus = target.parent_id || ROOT.id;
+          selected = target.id;
+          draw();
+        }
+      }
+    }
+  } else {
+    if (focus !== ROOT.id || selected !== null) {
+      focus = ROOT.id;
+      selected = null;
+      draw();
+    }
+  }
+});
+
+handleInitialHash();
+window.addEventListener("resize", draw);
 draw();
 </script></body></html>"""
