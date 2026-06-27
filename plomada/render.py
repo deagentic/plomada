@@ -181,7 +181,7 @@ function formatCompactSignature(sig) {
   return fullSig;
 }
 
-const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 
 function updatePanel() {
   const panel = document.getElementById("doc-panel");
@@ -209,14 +209,14 @@ function updatePanel() {
     if (sNode.label) {
       html += `<div class="doc-section">
         <h3>Expresión</h3>
-        <div style="font-family:monospace; background:#f8f9fa; padding:8px; border-radius:4px; border:1px solid var(--line); white-space:pre-wrap; word-break:break-all;">${sNode.label}</div>
+        <div style="font-family:monospace; background:#f8f9fa; padding:8px; border-radius:4px; border:1px solid var(--line); white-space:pre-wrap; word-break:break-all;">${esc(sNode.label)}</div>
       </div>`;
     }
     
     if (sNode.comment) {
       html += `<div class="doc-section">
         <h3>Comentario</h3>
-        <div class="docstring" style="border-left-color: var(--blue)">${sNode.comment}</div>
+        <div class="docstring" style="border-left-color: var(--blue)">${esc(sNode.comment)}</div>
       </div>`;
     }
     
@@ -224,18 +224,18 @@ function updatePanel() {
       html += `<div class="doc-section">
         <h3>ADRs Relacionados</h3>
         <div class="adr-badge-list">
-          ${sNode.adrs.map(adr => `<span class="adr-badge">${adr}</span>`).join("")}
+          ${sNode.adrs.map(adr => `<span class="adr-badge">${esc(adr)}</span>`).join("")}
         </div>
       </div>`;
     }
     
     if (fNode && (fNode.kind === "function" || fNode.kind === "method")) {
       html += `<hr style="border:0; border-top:1px dashed var(--line); margin:20px 0" />`;
-      html += `<div style="color:var(--dim); font-size:10px; font-weight:700; text-transform:uppercase; margin-bottom:8px">Función Contenedora: ${fNode.label}</div>`;
+      html += `<div style="color:var(--dim); font-size:10px; font-weight:700; text-transform:uppercase; margin-bottom:8px">Función Contenedora: ${esc(fNode.label)}</div>`;
       if (fNode.doc) {
         html += `<div class="doc-section">
           <h3>Docstring</h3>
-          <pre class="docstring">${fNode.doc}</pre>
+          <pre class="docstring">${esc(fNode.doc)}</pre>
         </div>`;
       }
     }
@@ -249,7 +249,7 @@ function updatePanel() {
     if (fNode.doc) {
       html += `<div class="doc-section">
         <h3>Documentación</h3>
-        <pre class="docstring">${fNode.doc}</pre>
+        <pre class="docstring">${esc(fNode.doc)}</pre>
       </div>`;
     }
     
@@ -262,15 +262,15 @@ function updatePanel() {
       } else {
         fNode.signature.params.forEach(p => {
           let pStr = `<div class="sig-param">`;
-          pStr += `<span class="sig-param-name">${p.name}</span>`;
-          if (p.type) pStr += `: <span class="sig-param-type">${p.type}</span>`;
-          if (p.default) pStr += ` = <span class="sig-param-default">${p.default}</span>`;
+          pStr += `<span class="sig-param-name">${esc(p.name)}</span>`;
+          if (p.type) pStr += `: <span class="sig-param-type">${esc(p.type)}</span>`;
+          if (p.default) pStr += ` = <span class="sig-param-default">${esc(p.default)}</span>`;
           pStr += `</div>`;
           html += pStr;
         });
       }
       if (fNode.signature.returns) {
-        html += `<div class="sig-returns">Retorno: <span class="sig-param-type">${fNode.signature.returns}</span></div>`;
+        html += `<div class="sig-returns">Retorno: <span class="sig-param-type">${esc(fNode.signature.returns)}</span></div>`;
       }
       html += `</div></div>`;
     }
@@ -279,7 +279,7 @@ function updatePanel() {
       html += `<div class="doc-section">
         <h3>ADRs del Componente</h3>
         <div class="adr-badge-list">
-          ${fNode.adrs.map(adr => `<span class="adr-badge">${adr}</span>`).join("")}
+          ${fNode.adrs.map(adr => `<span class="adr-badge">${esc(adr)}</span>`).join("")}
         </div>
       </div>`;
     }
@@ -287,7 +287,7 @@ function updatePanel() {
     if (fNode.comment) {
       html += `<div class="doc-section">
         <h3>Nota de Código</h3>
-        <div class="docstring" style="border-left-color: var(--blue)">${fNode.comment}</div>
+        <div class="docstring" style="border-left-color: var(--blue)">${esc(fNode.comment)}</div>
       </div>`;
     }
 
@@ -301,7 +301,7 @@ function updatePanel() {
     if (fNode.callers && fNode.callers.length) {
       html += `<div class="doc-section"><h3>Usado en (${fNode.callers.length})</h3><div class="callers">`;
       fNode.callers.forEach(c => {
-        html += `<a class="caller-link" onclick="goToUrlId('${c.url_id}')" title="${esc(c.url_id)}">${esc(c.label)}</a>`;
+        html += `<a class="caller-link" data-uid="${esc(c.url_id)}" title="${esc(c.url_id)}">${esc(c.label)}</a>`;
       });
       html += `</div></div>`;
     }
@@ -310,6 +310,9 @@ function updatePanel() {
     html = `<div style="color:var(--dim); text-align:center; margin-top:40px">Selecciona un elemento para ver su documentación o comentarios.</div>`;
   }
   content.innerHTML = html;
+  content.querySelectorAll(".caller-link[data-uid]").forEach(a => {   // sin onclick inline (anti-XSS)
+    a.addEventListener("click", () => goToUrlId(a.dataset.uid));
+  });
 }
 
 window.goToUrlId = function(uid){            // navegar a una función por su url_id (deep-link semántico)
@@ -696,16 +699,16 @@ function draw(){
     if (isFlowNode) {
       if (n.kind === "start" || n.kind === "end") {
         const r = mk("rect"); r.setAttribute("width", NW); r.setAttribute("height", NH); r.setAttribute("rx", 26); g.appendChild(r);
-      } else if (n.kind === "decision") {
-        const poly = mk("polygon"); poly.setAttribute("points", "105,0 210,26 105,52 0,26"); g.appendChild(poly);
+      } else if (n.kind === "decision") {       // rombo, escalado a NW (vértices: arriba/dcha/abajo/izq)
+        const poly = mk("polygon"); poly.setAttribute("points", `${NW/2},0 ${NW},${NH/2} ${NW/2},${NH} 0,${NH/2}`); g.appendChild(poly);
       } else if (n.kind === "read" || n.kind === "write") {
-        const poly = mk("polygon"); poly.setAttribute("points", "20,0 210,0 190,52 0,52"); g.appendChild(poly);
+        const poly = mk("polygon"); poly.setAttribute("points", `20,0 ${NW},0 ${NW-20},${NH} 0,${NH}`); g.appendChild(poly);
       } else if (n.kind === "call") {
         const r = mk("rect"); r.setAttribute("width", NW); r.setAttribute("height", NH); g.appendChild(r);
         const l1 = mk("line"); l1.setAttribute("class", "divider"); l1.setAttribute("x1", 15); l1.setAttribute("y1", 0); l1.setAttribute("x2", 15); l1.setAttribute("y2", NH); g.appendChild(l1);
-        const l2 = mk("line"); l2.setAttribute("class", "divider"); l2.setAttribute("x1", 195); l2.setAttribute("y1", 0); l2.setAttribute("x2", 195); l2.setAttribute("y2", NH); g.appendChild(l2);
+        const l2 = mk("line"); l2.setAttribute("class", "divider"); l2.setAttribute("x1", NW-15); l2.setAttribute("y1", 0); l2.setAttribute("x2", NW-15); l2.setAttribute("y2", NH); g.appendChild(l2);
       } else if (n.kind === "loop") {
-        const poly = mk("polygon"); poly.setAttribute("points", "15,0 195,0 210,26 195,52 15,52 0,26"); g.appendChild(poly);
+        const poly = mk("polygon"); poly.setAttribute("points", `15,0 ${NW-15},0 ${NW},${NH/2} ${NW-15},${NH} 15,${NH} 0,${NH/2}`); g.appendChild(poly);
       } else {
         const r = mk("rect"); r.setAttribute("width", NW); r.setAttribute("height", NH); g.appendChild(r);
       }
