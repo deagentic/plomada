@@ -95,6 +95,10 @@ border-radius:8px;padding:10px 12px;font-size:12px;box-shadow:0 1px 3px rgba(0,0
 .sig-param-name{color:var(--ink);font-weight:700}
 .sig-param-type{color:#c5221f}
 .sig-param-default{color:var(--dim)}
+.src-code{background:#f8f9fa;border:1px solid var(--line);border-radius:4px;padding:8px;font:11px/1.45 ui-monospace,SFMono-Regular,monospace;white-space:pre;overflow:auto;max-height:260px;margin:0}
+.callers{display:flex;flex-wrap:wrap;gap:6px}
+.caller-link{color:var(--blue);cursor:pointer;font-size:12px;background:#e8f0fe;border-radius:10px;padding:2px 10px;text-decoration:none}
+.caller-link:hover{background:#d2e3fc}
 .sig-returns{margin-top:8px;border-top:1px solid var(--line);padding-top:6px;font-weight:700}
 .adr-badge-list{display:flex;flex-wrap:wrap;gap:6px}
 .adr-badge{background:#fce8e6;color:#c5221f;border:1px solid #c5221f;padding:4px 8px;border-radius:4px;font-weight:700;font-size:11px}
@@ -148,7 +152,7 @@ window.setGraphType = function(type) {
 const KIND={package:"paquete",module:"módulo",class:"clase",function:"función",method:"método",
   statement:"sentencia",assign:"asignación",loop:"loop",branch:"rama",return:"return",call:"llamada",expr:"expr",
   store:"almacén",parameter:"parámetro",iterate:"bucle",start:"inicio",end:"fin",decision:"decisión",read:"lectura",write:"escritura",process:"proceso"};
-const NW=210, NH=52, GAPX=46, GAPY=70, PAD=40;
+let NW=210; const NH=52, GAPX=46, GAPY=70, PAD=40;
 
 function ancestors(id){const out=[];let c=byId[id];while(c){out.unshift(c);c=c.parent_id?byId[c.parent_id]:null;}return out;}
 
@@ -170,12 +174,14 @@ function formatCompactSignature(sig) {
   const pList = sig.params.map(p => p.name).join(", ");
   const ret = sig.returns ? ` -> ${sig.returns}` : "";
   const fullSig = `(${pList})${ret}`;
-  if (fullSig.length > 26) {
-    const shortParams = sig.params.map(p => p.name).slice(0, 2).join(", ");
-    return `(${shortParams}, ...)${ret}`;
+  if (fullSig.length > 58) {                  // solo si es muy larga (el nodo ya se autoajusta)
+    const shortParams = sig.params.map(p => p.name).slice(0, 3).join(", ");
+    return `(${shortParams}, …)${ret}`;
   }
   return fullSig;
 }
+
+const esc = s => (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 function updatePanel() {
   const panel = document.getElementById("doc-panel");
@@ -284,12 +290,36 @@ function updatePanel() {
         <div class="docstring" style="border-left-color: var(--blue)">${fNode.comment}</div>
       </div>`;
     }
+
+    if (fNode.source) {
+      html += `<div class="doc-section">
+        <h3>Código fuente</h3>
+        <pre class="src-code">${esc(fNode.source)}</pre>
+      </div>`;
+    }
+
+    if (fNode.callers && fNode.callers.length) {
+      html += `<div class="doc-section"><h3>Usado en (${fNode.callers.length})</h3><div class="callers">`;
+      fNode.callers.forEach(c => {
+        html += `<a class="caller-link" onclick="goToUrlId('${c.url_id}')" title="${esc(c.url_id)}">${esc(c.label)}</a>`;
+      });
+      html += `</div></div>`;
+    }
   } else {
     title.textContent = "Sin selección";
     html = `<div style="color:var(--dim); text-align:center; margin-top:40px">Selecciona un elemento para ver su documentación o comentarios.</div>`;
   }
   content.innerHTML = html;
 }
+
+window.goToUrlId = function(uid){            // navegar a una función por su url_id (deep-link semántico)
+  const target = G.nodes.find(n => n.url_id === uid);
+  if(!target) return;
+  if((childrenOf[target.id]||[]).length>0){ focus=target.id; selected=null; }
+  else { focus=target.parent_id||ROOT.id; selected=target.id; }
+  history.pushState(null,null,"#"+encodeURIComponent(uid));
+  draw();
+};
 
 function draw(){
   const svg=document.getElementById("svg"); svg.innerHTML="";
@@ -311,6 +341,17 @@ function draw(){
   let kids = allKids;
   if (hasGraphType) {
     kids = allKids.filter(n => n.graph_type === currentGraphType);
+  }
+  // #2 autosize: ancho de nodo (uniforme por vista) que quepa la firma/etiqueta más larga
+  {
+    let mc = 16;
+    kids.forEach(n => {
+      let t = (n.label || "").length;
+      if ((n.kind === "function" || n.kind === "method") && n.signature)
+        t = Math.max(t, formatCompactSignature(n.signature).length);
+      mc = Math.max(mc, t);
+    });
+    NW = Math.min(470, Math.max(210, Math.round(mc * 7.4 + 30)));
   }
 
   document.getElementById("empty").hidden = kids.length>0;
@@ -583,9 +624,15 @@ function draw(){
       lx = Math.min(x1, x2) - offset;
       ly = (y1 + y2) / 2;
     } else {
-      const x1=a.x+NW/2,y1=a.y+NH,x2=b.x+NW/2,y2=b.y;
+      const srcNode = byId[e.src];
+      let x1 = a.x + NW/2, y1 = a.y + NH;          // por defecto: vértice inferior
+      if (srcNode && srcNode.kind === "decision") {
+        // Sí y No deben salir de VÉRTICES DISTINTOS del rombo (evitar confusión)
+        if (e.label === "No") { x1 = a.x + NW; y1 = a.y + NH/2; }   // vértice derecho
+        else { x1 = a.x + NW/2; y1 = a.y + NH; }                    // vértice inferior (Sí/resto)
+      }
+      const x2=b.x+NW/2, y2=b.y;
       const my=(y1+y2)/2;
-      
       pathD = `M${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`;
       lx = x1 + (x2 - x1) * 0.35;
       ly = y1 + (y2 - y1) * 0.35;
@@ -698,15 +745,14 @@ function draw(){
       t.setAttribute("text-anchor", "middle");
     }
     
-    let maxLen = 28;
+    let maxLen = Math.max(22, Math.floor((NW - 24) / 7.4));   // dinámico según ancho del nodo
     if (isFlowNode) {
-      if (n.kind === "decision") maxLen = 20;
-      else if (n.kind === "read" || n.kind === "write" || n.kind === "loop") maxLen = 22;
-      else maxLen = 26;
+      if (n.kind === "decision") maxLen = Math.floor(maxLen * 0.65);   // el rombo angosta el texto
+      else if (n.kind === "read" || n.kind === "write" || n.kind === "loop") maxLen = Math.floor(maxLen * 0.82);
     } else if (role === "store") {
-      maxLen = 20;
+      maxLen = maxLen - 4;                                    // compartimento Dn
     } else if (n.recursive) {
-      maxLen = 24;
+      maxLen = maxLen - 4;                                    // badge ↺
     }
     
     t.textContent=(n.label||n.id).slice(0, maxLen);
@@ -751,8 +797,12 @@ function draw(){
       }
     }
     
+    if(n.callee_url_id) g.style.cursor="alias";   // indica que navega a otra función
     g.onclick=(evt)=>{
       evt.stopPropagation();
+      if(n.callee_url_id){                  // llamada → navega a la función destino
+        goToUrlId(n.callee_url_id); return;
+      }
       if(childrenOf[n.id].length){
         focus=n.id;selected=null;
       } else {
