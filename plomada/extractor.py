@@ -436,30 +436,31 @@ def _function_dfd(func, file_rel, func_id, name_index):
 
 
 def _classify_stmt(st, name_index):
-    """Clasifica una sentencia secuencial en su símbolo de flowchart."""
+    """Clasifica una sentencia secuencial → (kind, label, callee_name).
+    callee_name = nombre simple de la función llamada del proyecto (para navegar), o None."""
     if isinstance(st, (ast.Assign, ast.AnnAssign)) and isinstance(getattr(st, "value", None), ast.Call):
         fn = st.value.func
         nm = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
         if nm == "input":
-            return "read", "leer " + (", ".join(_stmt_targets(st)) or "")
+            return "read", "leer " + (", ".join(_stmt_targets(st)) or ""), None
         if nm in name_index:
-            return "call", _safe_unparse(st.value, 26)
+            return "call", _safe_unparse(st.value, 26), nm
     if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
         fn = st.value.func
         nm = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
         if nm == "print":
-            return "write", "escribir " + _safe_unparse(st.value, 20)
+            return "write", "escribir " + _safe_unparse(st.value, 20), None
         if nm in name_index:
-            return "call", _safe_unparse(st.value, 26)
-        return "process", _safe_unparse(st.value, 28)
+            return "call", _safe_unparse(st.value, 26), nm
+        return "process", _safe_unparse(st.value, 28), None
     if isinstance(st, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
         tg = ", ".join(_stmt_targets(st)) or "?"
         val = getattr(st, "value", None)
-        return "assign", tg + (" = " + _safe_unparse(val, 16) if val else "")
-    return "process", _safe_unparse(st, 26)
+        return "assign", tg + (" = " + _safe_unparse(val, 16) if val else ""), None
+    return "process", _safe_unparse(st, 26), None
 
 
-def _function_flowchart(func, file_rel, func_id, name_index):
+def _function_flowchart(func, file_rel, func_id, name_index, resolve=None):
     """Diagrama de FLUJO (control) estilo ISO 5807 / DFD-SMART: inicio/fin (óvalo),
     asignación/proceso (rectángulo), decisión (rombo), lectura/escritura (paralelogramo),
     llamada (subprograma), ciclo. Aristas = control de flujo con etiquetas Sí/No.
@@ -467,11 +468,14 @@ def _function_flowchart(func, file_rel, func_id, name_index):
     nodes, edges = [], []
     counter = [0]
 
-    def add(kind, label, line):
+    def add(kind, label, line, callee=None):
         counter[0] += 1
         i = f"{func_id}#c{counter[0]}@{line}"
-        nodes.append({"id": i, "level": "statement", "parent_id": func_id, "label": label,
-                      "kind": kind, "file": file_rel, "line": line, "graph_type": "flow"})
+        node = {"id": i, "level": "statement", "parent_id": func_id, "label": label,
+                "kind": kind, "file": file_rel, "line": line, "graph_type": "flow"}
+        if callee:                               # url_id de la función llamada → navegación
+            node["callee_url_id"] = callee
+        nodes.append(node)
         edges.append({"src": func_id, "dst": i, "type": "contains", "resolved": True,
                       "graph_type": "flow"})
         return i
@@ -562,8 +566,9 @@ def _function_flowchart(func, file_rel, func_id, name_index):
             elif isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
                 continue                           # docstring / string suelto → no es nodo del flowchart
             else:
-                kind, label = _classify_stmt(st, name_index)
-                n = add(kind, label, line)
+                kind, label, callee = _classify_stmt(st, name_index)
+                callee_url = resolve(callee) if (callee and resolve) else None
+                n = add(kind, label, line, callee=callee_url)
                 for s, lbl in cur:
                     link(s, n, lbl)
                 cur = [(n, None)]
@@ -724,6 +729,19 @@ def extract(project_root):
             continue
         _CallVisitor(file_rel, mv.defs, name_index, symbol_by_dotted, alias_map, edges).visit(tree)
 
+    # "usado en" (callers): qué funciones llaman a cada una (aristas call resueltas)
+    id_url = {nid: n.get("url_id") for nid, n in nodes.items()}
+    id_label = {nid: n["label"] for nid, n in nodes.items()}
+    callers = {}
+    for e in edges:
+        if e["type"] == "call" and e.get("resolved") and e["src"] in nodes and e["dst"] in nodes:
+            entry = {"url_id": id_url.get(e["src"]), "label": id_label.get(e["src"])}
+            lst = callers.setdefault(e["dst"], [])
+            if entry not in lst:
+                lst.append(entry)
+    for nid, lst in callers.items():
+        nodes[nid]["callers"] = sorted(lst, key=lambda c: c["label"] or "")
+
     # PASADA 3: vistas intra-función — DFD (datos) y Flowchart (control de flujo)
     for file_rel, mv in modules:
         try:
@@ -738,10 +756,22 @@ def extract(project_root):
             cmt = _comment_for(full, inline, line, src_lines)   # bloque full-line arriba + inline
             return {"comment": cmt, "adrs": _find_adrs(cmt)} if cmt else None
 
+        alias_map = {local: target for target, local in mv.imports}
+
+        def resolve_callee(name):               # nombre de llamada → url_id de la función destino
+            nid = symbol_by_dotted.get(alias_map.get(name)) if name in alias_map else None
+            if nid is None:
+                ts = name_index.get(name, [])
+                nid = ts[0] if len(ts) == 1 else None
+            return id_url.get(nid) if nid else None
+
         for qual, fnode in _walk_funcs(tree):
             d = mv.defs.get(qual)
             if not d:
                 continue
+            seg = ast.get_source_segment(src_content, fnode)   # código fuente para el panel
+            if seg and d["id"] in nodes:
+                nodes[d["id"]]["source"] = seg
             # vista DFD (flujo de datos)
             sn, se = _function_dfd(fnode, file_rel, d["id"], name_index)
             for n in sn:
@@ -752,10 +782,13 @@ def extract(project_root):
                 e.setdefault("graph_type", "dfd")
             edges.extend(se)
             # vista Flowchart (control de flujo)
-            fn_, fe = _function_flowchart(fnode, file_rel, d["id"], name_index)
+            fn_, fe = _function_flowchart(fnode, file_rel, d["id"], name_index, resolve=resolve_callee)
             for n in fn_:
+                ex = dict(_stmt_extra(n["line"]) or {})
+                if n.get("callee_url_id"):
+                    ex["callee_url_id"] = n["callee_url_id"]
                 add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"],
-                         n["line"], graph_type="flow", extra=_stmt_extra(n["line"]))
+                         n["line"], graph_type="flow", extra=ex or None)
             edges.extend(fe)
 
     # Colapsar cadenas de paquetes de un solo hijo

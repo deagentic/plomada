@@ -334,3 +334,26 @@ def test_url_id_collision():
         nodes_by_url = {n["url_id"]: n for n in res["nodes"] if "url_id" in n}
         assert "coll" in nodes_by_url
         assert "coll-1" in nodes_by_url
+
+
+def test_navigation_callers_source():
+    # callee_url_id (navegar a la función llamada), callers ("usado en"), source
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg = os.path.join(tmpdir, "pkg"); os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(pkg, "m.py"), "w").write(
+            "def helper(x: int) -> int:\n    return x + 1\n\n"
+            "def main(n: int):\n    y = helper(n)\n    return y\n")
+        res = extractor.extract(tmpdir)
+        byid = {n["id"]: n for n in res["nodes"]}
+        helper = next(n for n in res["nodes"] if n["label"] == "helper")
+        main = next(n for n in res["nodes"] if n["label"] == "main")
+
+        # callers: helper es usado por main
+        assert any(c["label"] == "main" for c in helper.get("callers", []))
+        # source de la función
+        assert main.get("source", "").startswith("def main")
+        # nodo call del flowchart de main navega a helper
+        call_nodes = [n for n in res["nodes"] if n.get("parent_id") == main["id"]
+                      and n.get("graph_type") == "flow" and n.get("callee_url_id")]
+        assert any(n["callee_url_id"] == helper["url_id"] for n in call_nodes)
