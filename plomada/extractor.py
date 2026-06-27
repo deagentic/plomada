@@ -12,6 +12,78 @@ imports antes del índice global; se ignoran llamadas a parámetros locales.
 """
 import ast
 import os
+import re
+import tokenize
+
+_ADR_RE = re.compile(r"ADR[-\s]?\d{1,5}", re.I)
+
+
+def _find_adrs(*texts):
+    out = []
+    for t in texts:
+        if t:
+            for m in _ADR_RE.findall(t):
+                tag = re.sub(r"[\s_]", "-", m.upper())
+                if tag not in out:
+                    out.append(tag)
+    return out
+
+
+def _signature(func):
+    """Firma de tipos: params [{name,type,default}] + returns (desde anotaciones)."""
+    a = func.args
+    pos = getattr(a, "posonlyargs", []) + a.args
+    defaults = list(a.defaults)
+    pad = [None] * (len(pos) - len(defaults))
+    params = []
+    for arg, dflt in zip(pos, pad + defaults):
+        params.append({"name": arg.arg,
+                       "type": _safe_unparse(arg.annotation, 40) if arg.annotation else None,
+                       "default": _safe_unparse(dflt, 20) if dflt is not None else None})
+    if a.vararg:
+        params.append({"name": "*" + a.vararg.arg,
+                       "type": _safe_unparse(a.vararg.annotation, 40) if a.vararg.annotation else None,
+                       "default": None})
+    for arg, dflt in zip(a.kwonlyargs, a.kw_defaults):
+        params.append({"name": arg.arg,
+                       "type": _safe_unparse(arg.annotation, 40) if arg.annotation else None,
+                       "default": _safe_unparse(dflt, 20) if dflt is not None else None})
+    if a.kwarg:
+        params.append({"name": "**" + a.kwarg.arg,
+                       "type": _safe_unparse(a.kwarg.annotation, 40) if a.kwarg.annotation else None,
+                       "default": None})
+    return {"params": params,
+            "returns": _safe_unparse(func.returns, 40) if func.returns else None}
+
+
+def _extract_comments(path):
+    """Comentarios vía tokenize (ast los descarta). Devuelve (full, inline):
+    full[lineno]=texto (comentario de línea completa), inline[lineno]=texto (al final de código)."""
+    full, inline = {}, {}
+    try:
+        src = open(path, encoding="utf-8").read().splitlines()
+        with open(path, "rb") as f:
+            for tok in tokenize.tokenize(f.readline):
+                if tok.type == tokenize.COMMENT:
+                    ln = tok.start[0]
+                    txt = tok.string.lstrip("#").strip()
+                    line = src[ln - 1] if 0 <= ln - 1 < len(src) else ""
+                    (full if line.lstrip().startswith("#") else inline)[ln] = txt
+    except (tokenize.TokenError, SyntaxError, UnicodeDecodeError, OSError):
+        pass
+    return full, inline
+
+
+def _comment_for(full, inline, line):
+    """Comentario asociado a una línea: bloque de cabecera contiguo arriba + inline."""
+    parts, L = [], line - 1
+    block = []
+    while L in full:                      # comentarios full-line contiguos justo encima
+        block.append(full[L]); L -= 1
+    parts += reversed(block)
+    if line in inline:
+        parts.append(inline[line])
+    return " · ".join(parts) if parts else None
 
 
 def _rel(path, root):
@@ -47,16 +119,18 @@ class _ModuleVisitor(ast.NodeVisitor):
         self.imports = []       # (target_dotted, local_name)
         self._stack = []        # [(name, kind)]
 
-    def _add(self, name, kind, lineno):
+    def _add(self, name, kind, lineno, doc=None, signature=None):
         q = ".".join([n for n, _ in self._stack] + [name])
         parent_qual = ".".join(n for n, _ in self._stack) or None
         self.defs[q] = {"id": _node_id(self.file_rel, q, lineno), "kind": kind,
-                        "qualname": q, "line": lineno, "parent_qual": parent_qual}
+                        "qualname": q, "line": lineno, "parent_qual": parent_qual,
+                        "doc": doc, "signature": signature}
 
     def visit_FunctionDef(self, node):
         container_kind = self._stack[-1][1] if self._stack else None
         kind = "method" if container_kind == "class" else "function"
-        self._add(node.name, kind, node.lineno)
+        self._add(node.name, kind, node.lineno,
+                  doc=ast.get_docstring(node), signature=_signature(node))
         self._stack.append((node.name, kind))
         self.generic_visit(node)
         self._stack.pop()
@@ -64,7 +138,7 @@ class _ModuleVisitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node):
-        self._add(node.name, "class", node.lineno)
+        self._add(node.name, "class", node.lineno, doc=ast.get_docstring(node))
         self._stack.append((node.name, "class"))
         self.generic_visit(node)
         self._stack.pop()
@@ -518,8 +592,10 @@ def extract(project_root):
     name_index = {}     # nombre simple -> [ids]
     symbol_by_dotted = {}   # "pkg.mod.Clase.metodo" -> id
 
+    comments_by_file = {}                     # file_rel -> (full, inline)
+
     def add_node(nid, level, parent, label, kind, file, line, dfd_role=None, in_loop=None,
-                 graph_type=None):
+                 graph_type=None, extra=None):
         node = {
             "id": nid,
             "level": level,
@@ -535,9 +611,14 @@ def extract(project_root):
             node["in_loop"] = True
         if graph_type:                       # "dfd" (flujo de datos) | "flow" (control/flowchart)
             node["graph_type"] = graph_type
+        if extra:                            # doc, signature, comment, adrs, url_id, …
+            for k, v in extra.items():
+                if v:
+                    node[k] = v
         nodes.setdefault(nid, node)
 
-    add_node(_package_id(""), "package", None, os.path.basename(project_root), "package", ".", 0)
+    add_node(_package_id(""), "package", None, os.path.basename(project_root), "package", ".", 0,
+             extra={"url_id": os.path.basename(project_root)})
 
     py_files = _iter_py(project_root)
 
@@ -550,7 +631,8 @@ def extract(project_root):
         for i in range(len(parts)):
             sub = "/".join(parts[: i + 1])
             parent = _package_id("/".join(parts[:i])) if i else _package_id("")
-            add_node(_package_id(sub), "package", parent, parts[i], "package", sub, 0)
+            add_node(_package_id(sub), "package", parent, parts[i], "package", sub, 0,
+                     extra={"url_id": sub.replace("/", ".")})
             edges.append({"src": parent, "dst": _package_id(sub), "type": "contains", "resolved": True})
 
     # PASADA 1: símbolos
@@ -563,13 +645,21 @@ def extract(project_root):
         dotted = _dotted(file_rel)
         mv = _ModuleVisitor(file_rel, dotted)
         mv.visit(tree)
+        full, inline = _extract_comments(f)              # comentarios vía tokenize
+        comments_by_file[file_rel] = (full, inline)
+        mod_doc = ast.get_docstring(tree)
         pkg_rel = _rel(os.path.dirname(f), project_root)
         pkg_parent = _package_id("" if pkg_rel == "." else pkg_rel)
         mid = _module_id(file_rel)
-        add_node(mid, "module", pkg_parent, dotted, "module", file_rel, 0)
+        add_node(mid, "module", pkg_parent, dotted, "module", file_rel, 0,
+                 extra={"url_id": dotted, "doc": mod_doc, "adrs": _find_adrs(mod_doc)})
         edges.append({"src": pkg_parent, "dst": mid, "type": "contains", "resolved": True})
         for q, d in mv.defs.items():
-            add_node(d["id"], "function", mid, q, d["kind"], file_rel, d["line"])
+            cmt = _comment_for(full, inline, d["line"])
+            add_node(d["id"], "function", mid, q, d["kind"], file_rel, d["line"],
+                     extra={"url_id": f"{dotted}.{q}", "doc": d.get("doc"),
+                            "signature": d.get("signature"), "comment": cmt,
+                            "adrs": _find_adrs(d.get("doc"), cmt)})
             name_index.setdefault(q.split(".")[-1], []).append(d["id"])
             symbol_by_dotted[f"{dotted}.{q}"] = d["id"]
         modules.append((file_rel, mv))
@@ -610,6 +700,12 @@ def extract(project_root):
                              filename=file_rel)
         except (SyntaxError, UnicodeDecodeError):
             continue
+        full, inline = comments_by_file.get(file_rel, ({}, {}))
+
+        def _stmt_extra(line):                  # comentario/ADR anclado a la línea
+            cmt = _comment_for(full, inline, line)   # bloque full-line arriba + inline
+            return {"comment": cmt, "adrs": _find_adrs(cmt)} if cmt else None
+
         for qual, fnode in _walk_funcs(tree):
             d = mv.defs.get(qual)
             if not d:
@@ -618,7 +714,8 @@ def extract(project_root):
             sn, se = _function_dfd(fnode, file_rel, d["id"], name_index)
             for n in sn:
                 add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"],
-                         n["line"], n.get("dfd_role"), n.get("in_loop"), graph_type="dfd")
+                         n["line"], n.get("dfd_role"), n.get("in_loop"), graph_type="dfd",
+                         extra=_stmt_extra(n["line"]))
             for e in se:
                 e.setdefault("graph_type", "dfd")
             edges.extend(se)
@@ -626,7 +723,7 @@ def extract(project_root):
             fn_, fe = _function_flowchart(fnode, file_rel, d["id"], name_index)
             for n in fn_:
                 add_node(n["id"], n["level"], n["parent_id"], n["label"], n["kind"], n["file"],
-                         n["line"], graph_type="flow")
+                         n["line"], graph_type="flow", extra=_stmt_extra(n["line"]))
             edges.extend(fe)
 
     # Colapsar cadenas de paquetes de un solo hijo

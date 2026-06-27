@@ -281,3 +281,37 @@ def test_function_flowchart_enhanced_control_flow():
 
 
 
+
+
+def test_docs_types_comments_url():
+    # docstrings + firma de tipos + comentarios/ADR + url_id
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg = os.path.join(tmpdir, "pkg"); os.makedirs(pkg)
+        open(os.path.join(pkg, "__init__.py"), "w").write("# init\n")
+        open(os.path.join(pkg, "m.py"), "w").write(
+            '"""Módulo demo. Ver ADR-0001."""\n'
+            "def saluda(nombre: str, veces: int = 1) -> str:\n"
+            '    """Devuelve un saludo."""\n'
+            "    # implementa ADR-0042\n"
+            "    msg = nombre * veces  # arma el mensaje\n"
+            "    return msg\n")
+        res = extractor.extract(tmpdir)
+
+        mod = next(n for n in res["nodes"] if n.get("url_id") == "pkg.m")
+        assert mod["doc"].startswith("Módulo demo")
+        assert "ADR-0001" in mod.get("adrs", [])
+        assert mod["url_id"] == "pkg.m"
+
+        fn = next(n for n in res["nodes"] if n["label"] == "saluda")
+        assert fn["doc"] == "Devuelve un saludo."
+        assert fn["url_id"] == "pkg.m.saluda"
+        sig = fn["signature"]
+        assert sig["returns"] == "str"
+        params = {p["name"]: p for p in sig["params"]}
+        assert params["nombre"]["type"] == "str"
+        assert params["veces"]["type"] == "int" and params["veces"]["default"] == "1"
+
+        # comentario (cabecera + inline) y ADR anclados a la sentencia msg
+        msg_nodes = [n for n in res["nodes"] if n["level"] == "statement"
+                     and n.get("comment") and "ADR-0042" in n.get("adrs", [])]
+        assert msg_nodes, "el comentario/ADR debe anclarse a la sentencia"
